@@ -86,11 +86,15 @@ cat > "$LOADER_SCRIPT" << 'EOF'
 FUNCTIONS_DIR="$(dirname "${BASH_SOURCE[0]}")/functions"
 
 # 加载所有 .sh 文件 | Load all .sh files
-for func_file in "$FUNCTIONS_DIR"/*.sh; do
-    if [ -f "$func_file" ]; then
-        source "$func_file"
-    fi
-done
+# 兼容 bash 和 zsh 的方法
+if [ -d "$FUNCTIONS_DIR" ]; then
+    for func_file in "$FUNCTIONS_DIR"/*.sh; do
+        # 检查是否真的存在文件（避免 glob 不匹配的情况）
+        if [ -f "$func_file" ] && [ "$(basename "$func_file")" != "*.sh" ]; then
+            source "$func_file"
+        fi
+    done
+fi
 EOF
 chmod +x "$LOADER_SCRIPT"
 print_success "加载脚本已创建: $LOADER_SCRIPT | Loader script created: $LOADER_SCRIPT"
