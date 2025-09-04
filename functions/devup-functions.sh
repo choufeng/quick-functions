@@ -12,13 +12,13 @@ devup() {
     # ==============================================
     
     # 默认配置（适用于 uc-frontend 项目）- Default configuration (for uc-frontend project)
-    local package_dir="~/development/uc-frontend/packages/modal--agent-orders.react"
-    local app_dir="~/development/uc-frontend/apps/lab"
+    local package_dir="$HOME/development/uc-frontend/packages/modal--agent-orders.react"
+    local app_dir="$HOME/development/uc-frontend/apps/lab"
     local package_name="@uc/modal--agent-orders.react"
     
     # 自定义配置示例 - Custom configuration examples:
-    # local package_dir="~/your-project/packages/your-package"
-    # local app_dir="~/your-project/apps/your-app"
+    # local package_dir="$HOME/your-project/packages/your-package"
+    # local app_dir="$HOME/your-project/apps/your-app"
     # local package_name="@your-org/your-package-name"
     
     # ==============================================
@@ -124,12 +124,32 @@ devup() {
 
 # 配置助手函数 | Configuration helper function
 devup_config() {
+    # 获取默认配置值
+    local package_dir="$HOME/development/uc-frontend/packages/modal--agent-orders.react"
+    local app_dir="$HOME/development/uc-frontend/apps/lab"
+    local package_name="@uc/modal--agent-orders.react"
+    
     echo "🔧 devup 配置助手 | devup Configuration Helper"
     echo ""
     echo "当前配置 | Current Configuration:"
-    echo "包目录 | Package Directory: \$package_dir"
-    echo "应用目录 | App Directory: \$app_dir" 
-    echo "包名称 | Package Name: \$package_name"
+    echo "包目录 | Package Directory: $package_dir"
+    echo "应用目录 | App Directory: $app_dir" 
+    echo "包名称 | Package Name: $package_name"
+    echo ""
+    
+    # 检查路径是否存在
+    if [ -d "$package_dir" ]; then
+        echo "✅ 包目录存在 | Package directory exists"
+    else
+        echo "❌ 包目录不存在 | Package directory not found"
+    fi
+    
+    if [ -d "$app_dir" ]; then
+        echo "✅ 应用目录存在 | App directory exists"
+    else
+        echo "❌ 应用目录不存在 | App directory not found"
+    fi
+    
     echo ""
     echo "如需修改配置，请编辑此文件: | To modify configuration, please edit this file:"
     echo "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "devup-functions.sh")"

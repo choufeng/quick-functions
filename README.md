@@ -56,8 +56,8 @@ Default configuration works for `uc-frontend` project without modification:
 
 ```bash
 # Default paths (works for most cases)
-package_dir="~/development/uc-frontend/packages/modal--agent-orders.react"
-app_dir="~/development/uc-frontend/apps/lab"
+package_dir="$HOME/development/uc-frontend/packages/modal--agent-orders.react"
+app_dir="$HOME/development/uc-frontend/apps/lab"
 package_name="@uc/modal--agent-orders.react"
 ```
 
@@ -66,8 +66,8 @@ To modify, edit `~/.quick-functions/functions/devup-functions.sh`:
 
 ```bash
 # Custom configuration example
-local package_dir="~/your-project/packages/your-package"
-local app_dir="~/your-project/apps/your-app"
+local package_dir="$HOME/your-project/packages/your-package"
+local app_dir="$HOME/your-project/apps/your-app"
 local package_name="@your-org/your-package-name"
 ```
 

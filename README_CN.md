@@ -56,8 +56,8 @@ source ~/.zshrc  # 或 source ~/.bashrc
 
 ```bash
 # 默认路径（适用于大多数情况）
-package_dir="~/development/uc-frontend/packages/modal--agent-orders.react"
-app_dir="~/development/uc-frontend/apps/lab"
+package_dir="$HOME/development/uc-frontend/packages/modal--agent-orders.react"
+app_dir="$HOME/development/uc-frontend/apps/lab"
 package_name="@uc/modal--agent-orders.react"
 ```
 
@@ -66,8 +66,8 @@ package_name="@uc/modal--agent-orders.react"
 
 ```bash
 # 自定义配置示例
-local package_dir="~/your-project/packages/your-package"
-local app_dir="~/your-project/apps/your-app"
+local package_dir="$HOME/your-project/packages/your-package"
+local app_dir="$HOME/your-project/apps/your-app"
 local package_name="@your-org/your-package-name"
 ```
 
