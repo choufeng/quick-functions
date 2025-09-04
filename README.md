@@ -1,101 +1,147 @@
 # Quick Functions 🚀
 
-一个便捷的终端工具函数库，帮助开发者快速设置常用的 shell 函数。
+> **Language | 语言**: [🇺🇸 English](README.md) | [🇨🇳 中文](README_CN.md)
 
 A convenient terminal utility function library to help developers quickly set up commonly used shell functions.
 
-## 功能 | Features
+## Features
 
-### `devup` - Node.js 本地包强制更新工具
-强制更新本地 Node.js 包并启动开发服务器的自动化工具。特别适用于 monorepo 项目中的本地包开发。
+### `devup` - Node.js Local Package Force Update Tool
+An automation tool for force-updating local Node.js packages and starting development servers. Especially useful for local package development in monorepo projects.
 
-- 🔄 自动执行 `pnpm pack` 构建最新包
-- 📦 智能查找最新的 `.tgz` 文件（按修改时间）
-- 🗑️ 强制移除并重新安装包（解决相同版本不更新问题）
-- 🚀 自动启动开发服务器
-- 🌍 中英文双语提示
-- 💻 支持 zsh 和 bash
-- 🖥️ 跨平台兼容（macOS/Linux）
+- 🔄 Automatically execute `pnpm pack` to build the latest package
+- 📦 Intelligently find the latest `.tgz` files (sorted by modification time)
+- 🗑️ Force remove and reinstall packages (solving the issue of same version not updating)
+- 🚀 Automatically start development server
+- 🌍 Bilingual prompts (Chinese/English)
+- 💻 Support for zsh and bash
+- 🖥️ Cross-platform compatible (macOS/Linux)
+- 🛡️ Safe path handling (supports spaces and special characters)
 
-## 快速安装 | Quick Installation
+## Quick Installation
 
 ```bash
-# 克隆项目
-git clone <repository-url> ~/quick-functions
+# Clone the project
+git clone https://github.com/choufeng/quick-functions ~/quick-functions
 cd ~/quick-functions
 
-# 安装
+# Install
 ./install.sh
 
-# 开始使用
+# Start using
 devup
 ```
 
-## 手动安装 | Manual Installation
+## Manual Installation
 
 ```bash
-# 1. 复制函数文件到主目录
-cp functions/devup-functions.sh ~/
+# 1. Copy function files to home directory
+cp functions/devup-functions.sh ~/.quick-functions/functions/
 
-# 2. 添加到 shell 配置文件
+# 2. Add to shell configuration file
 # For zsh:
-echo 'source $HOME/devup-functions.sh' >> ~/.zshrc
+echo 'source $HOME/.quick-functions/load.sh' >> ~/.zshrc
 
 # For bash:
-echo 'source $HOME/devup-functions.sh' >> ~/.bashrc
+echo 'source $HOME/.quick-functions/load.sh' >> ~/.bashrc
 
-# 3. 重新加载配置
+# 3. Reload configuration
 source ~/.zshrc  # or source ~/.bashrc
 ```
 
-## 配置 | Configuration
+## Configuration
 
-### devup 函数默认配置
-默认配置适用于 `uc-frontend` 项目，无需修改即可使用：
+### Default Configuration for devup Function
+Default configuration works for `uc-frontend` project without modification:
 
 ```bash
-# 默认路径（适用于大多数情况）
+# Default paths (works for most cases)
 package_dir="~/development/uc-frontend/packages/modal--agent-orders.react"
 app_dir="~/development/uc-frontend/apps/lab"
 package_name="@uc/modal--agent-orders.react"
 ```
 
-### 自定义配置
-如需修改，编辑 `~/devup-functions.sh`：
+### Custom Configuration
+To modify, edit `~/.quick-functions/functions/devup-functions.sh`:
 
 ```bash
-# 自定义配置示例
+# Custom configuration example
 local package_dir="~/your-project/packages/your-package"
 local app_dir="~/your-project/apps/your-app"
 local package_name="@your-org/your-package-name"
 ```
 
-## 使用方法 | Usage
+## Usage
 
-### devup 命令
+### devup Command
 ```bash
-devup  # 执行完整的包更新和启动流程
+devup  # Execute complete package update and startup process
 ```
 
-该命令将：
-1. 切换到包目录并执行 `pnpm pack`
-2. 切换回应用目录
-3. 移除现有的包
-4. 安装最新打包的本地包
-5. 启动开发服务器
+This command will:
+1. Switch to package directory and execute `pnpm pack`
+2. Switch back to application directory
+3. Remove existing package
+4. Install latest packed local package
+5. Start development server
 
-## 支持的环境 | Supported Environments
+### Configuration Helper
+```bash
+devup_config  # Show current configuration
+```
+
+## Management
+
+### Update Functions
+```bash
+~/.quick-functions/update.sh  # Update from git repository
+```
+
+## Installation Location
+
+The installer creates a safe installation directory:
+
+```
+~/.quick-functions/
+├── functions/
+│   └── devup-functions.sh
+├── load.sh              # Auto-loader for all functions
+└── update.sh            # Update script
+```
+
+## Supported Environments
 
 - ✅ macOS (zsh/bash)
 - ✅ Linux (zsh/bash)
 - ✅ Windows WSL (zsh/bash)
+- ✅ Paths with spaces and special characters
 
-## 贡献 | Contributing
+## Path Safety
 
-欢迎提交 Issue 和 Pull Request！
+This project handles path safety issues:
+- ✅ Supports clone paths with spaces (e.g., `/Users/John Doe/My Projects/`)
+- ✅ Supports special characters in paths
+- ✅ Uses fixed installation directory `~/.quick-functions`
+- ✅ All paths are properly quoted and escaped
+
+## Contributing
 
 Welcome to submit Issues and Pull Requests!
 
-## 许可证 | License
+### Development Workflow
+```bash
+# 1. Fork and clone
+git clone <your-fork>
+
+# 2. Make changes to functions/
+# 3. Test with ./test.sh
+# 4. Submit PR
+```
+
+## License
 
 MIT License
+
+---
+
+**Quick Functions** - Making terminal development faster and easier! 🚀
