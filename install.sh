@@ -83,14 +83,14 @@ cat > "$LOADER_SCRIPT" << 'EOF'
 # Quick Functions 加载脚本 | Quick Functions Loader Script
 # 自动加载所有函数文件 | Auto load all function files
 
-FUNCTIONS_DIR="$(dirname "${BASH_SOURCE[0]}")/functions"
+# 使用固定路径，避免路径解析问题
+FUNCTIONS_DIR="$HOME/.quick-functions/functions"
 
 # 加载所有 .sh 文件 | Load all .sh files
-# 兼容 bash 和 zsh 的方法
 if [ -d "$FUNCTIONS_DIR" ]; then
     for func_file in "$FUNCTIONS_DIR"/*.sh; do
         # 检查是否真的存在文件（避免 glob 不匹配的情况）
-        if [ -f "$func_file" ] && [ "$(basename "$func_file")" != "*.sh" ]; then
+        if [ -f "$func_file" ]; then
             source "$func_file"
         fi
     done
@@ -146,6 +146,29 @@ if [ -d "$SCRIPT_DIR/.git" ]; then
     # 重新安装
     echo "🔧 重新安装函数... | Reinstalling functions..."
     cp -r "$SCRIPT_DIR/functions"/* "$FUNCTIONS_DIR/"
+    
+    # 重新生成 load.sh （确保使用最新的修复版本）
+    echo "🔄 更新加载脚本... | Updating load script..."
+    cat > "$INSTALL_DIR/load.sh" << 'LOAD_EOF'
+#!/usr/bin/env bash
+# Quick Functions 加载脚本 | Quick Functions Loader Script
+# 自动加载所有函数文件 | Auto load all function files
+
+# 使用固定路径，避免路径解析问题
+FUNCTIONS_DIR="\$HOME/.quick-functions/functions"
+
+# 加载所有 .sh 文件 | Load all .sh files
+if [ -d "\$FUNCTIONS_DIR" ]; then
+    for func_file in "\$FUNCTIONS_DIR"/*.sh; do
+        # 检查是否真的存在文件（避免 glob 不匹配的情况）
+        if [ -f "\$func_file" ]; then
+            source "\$func_file"
+        fi
+    done
+fi
+LOAD_EOF
+    chmod +x "$INSTALL_DIR/load.sh"
+    
     echo "✅ 更新完成！| Update completed!"
 else
     echo "⚠️  非 git 仓库，请手动重新安装 | Not a git repository, please reinstall manually"
