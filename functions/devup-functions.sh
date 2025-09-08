@@ -67,13 +67,9 @@ devup() {
         return 1
     }
     
-    # 3. 移除现有包以确保强制更新
-    echo "🗑️  移除现有包... | Removing existing package..."
-    if [ -f "./pnpm" ]; then
-        ./pnpm remove "$package_name" 2>/dev/null || echo "   (包可能不存在，继续... | Package may not exist, continuing...)"
-    else
-        pnpm remove "$package_name" 2>/dev/null || echo "   (包可能不存在，继续... | Package may not exist, continuing...)"
-    fi
+    # 3. 跳过移除步骤 - pnpm add 会自动覆盖现有包
+    echo "⚡ 跳过移除步骤，直接覆盖安装... | Skipping remove step, directly overwriting..."
+    echo "   (pnpm add 会自动处理包的更新 | pnpm add will handle package updates automatically)"
     
     # 4. 查找最新的 tgz 文件（按修改时间排序）
     echo "🔍 查找最新的包文件... | Looking for latest package file..."
