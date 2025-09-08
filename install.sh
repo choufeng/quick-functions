@@ -76,6 +76,29 @@ print_info "复制函数文件... | Copying function files..."
 cp -r "$SOURCE_FUNCTIONS_DIR"/* "$FUNCTIONS_DIR/"
 print_success "函数文件已安装到: $FUNCTIONS_DIR | Function files installed to: $FUNCTIONS_DIR"
 
+# 创建默认配置文件 | Create default config file
+CONFIG_JSON="$INSTALL_DIR/devup-configs.json"
+if [ ! -f "$CONFIG_JSON" ]; then
+    print_info "创建默认配置文件... | Creating default configuration file..."
+    cat > "$CONFIG_JSON" << 'CONFIG_EOF'
+{
+  "configs": [
+    {
+      "name": "default",
+      "description": "Default development configuration",
+      "package_dir": "$HOME/development/your-project/packages/your-package",
+      "app_dir": "$HOME/development/your-project/apps/your-app",
+      "package_name": "@your-org/your-package-name",
+      "start_command": "./pnpm start"
+    }
+  ]
+}
+CONFIG_EOF
+    print_success "默认配置文件已创建: $CONFIG_JSON | Default config file created: $CONFIG_JSON"
+else
+    print_info "配置文件已存在，跳过创建 | Config file exists, skipping creation"
+fi
+
 # 创建加载脚本 | Create loader script
 LOADER_SCRIPT="$INSTALL_DIR/load.sh"
 cat > "$LOADER_SCRIPT" << 'EOF'
@@ -196,11 +219,48 @@ echo ""
 
 # 测试安装 | Test installation
 if command -v devup >/dev/null 2>&1; then
-    print_success "✅ devup 命令已可用！| devup command is available!"
-    echo "💡 现在可以运行 'devup' 开始使用 | You can now run 'devup' to get started"
+    echo ""
+    print_success "🎉 安装并激活成功！| Installation and activation successful!"
+    echo ""
+    print_warning "⚠️  首次使用前需要配置项目路径 | Please configure project paths before first use"
+    print_info "🔧 编辑配置文件 | Edit configuration file:"
+    echo "  $CONFIG_JSON"
+    echo ""
+    print_info "📝 配置示例 | Configuration example:"
+    echo '  {
+    "configs": [
+      {
+        "name": "my-project",
+        "description": "My project description", 
+        "package_dir": "$HOME/development/my-project/packages/my-package",
+        "app_dir": "$HOME/development/my-project/apps/my-app",
+        "package_name": "@my-org/my-package-name",
+        "start_command": "./pnpm start"
+      }
+    ]
+  }'
+    echo ""
+    print_info "📖 快速开始 | Quick Start:"
+    echo "  devup           - 使用第一个配置 | Use first configuration"
+    echo "  devup --list    - 查看所有配置 | View all configurations"
+    echo "  devup --show    - 查看配置详情 | View configuration details"
+    echo "  devup --help    - 查看帮助信息 | View help information"
 else
-    print_warning "⚠️  请重启终端或运行以下命令激活: | Please restart terminal or run the following to activate:"
-    echo "  source $CONFIG_FILE"
+    echo ""
+    print_warning "⚠️  函数需要激活后才能使用 | Functions need to be activated before use"
+    print_info "🔧 请选择以下任一方式激活 | Please choose one of the following methods to activate:"
+    echo ""
+    echo "  方法1 | Method 1 (推荐 | Recommended):"
+    echo "    source $CONFIG_FILE"
+    echo ""
+    echo "  方法2 | Method 2:"
+    echo "    重启终端 | Restart terminal"
+    echo ""
+    echo "  方法3 | Method 3 (临时激活 | Temporary activation):"
+    echo "    source $LOADER_SCRIPT"
+    echo ""
+    print_info "💡 激活后，请记得编辑配置文件 | After activation, remember to edit config file:"
+    echo "  $CONFIG_JSON"
 fi
 
 echo ""
