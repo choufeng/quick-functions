@@ -257,13 +257,13 @@ devup() {
             echo "⏰ 文件修改时间: $(stat -c "%y" "$tgz_file" 2>/dev/null || echo "N/A") | File modification time: $(stat -c "%y" "$tgz_file" 2>/dev/null || echo "N/A")"
         fi
         
-        # 强制安装包（确保覆盖缓存）
-        echo "🚀 强制安装 alpha 版本包... | Force installing alpha version package..."
+        # 强制安装包（使用配置中的包名和 package@file:path 格式避免旧路径验证）| Force install package using package name from config and package@file:path format to avoid old path validation
+        echo "🚀 强制安装 alpha 版本包: $package_name | Force installing alpha version package: $package_name"
         local install_success=false
         if [ -f "./pnpm" ]; then
-            ./pnpm add "$tgz_file" --force && install_success=true
+            ./pnpm add "${package_name}@file:${tgz_file}" --force && install_success=true
         else
-            pnpm add "$tgz_file" --force && install_success=true
+            pnpm add "${package_name}@file:${tgz_file}" --force && install_success=true
         fi
         
         # 安装成功后立即清理当前包文件 | Clean up current package file after successful installation
@@ -562,6 +562,7 @@ _devup_show_config() {
 # - 使用时间戳确保每次版本号都不同 (如: 5.2.1-alpha.20250202010102) | Use timestamp to ensure unique version each time
 # - pack 前自动执行构建命令确保最新代码 | Auto-execute build command before pack to ensure latest code
 # - pack 完成后立即恢复原始 package.json | Restore original package.json immediately after pack
+# - 使用 package@file:path 格式安装避免旧路径验证 | Use package@file:path format to avoid old path validation
 # - 强制安装参数 --force 确保覆盖缓存 | Force install with --force to override cache
 # - 需要 jq 工具来安全地修改 JSON 文件 | Requires jq tool for safe JSON modification
 # - 可使用 devup_reload 重新加载函数 | Use devup_reload to refresh functions
