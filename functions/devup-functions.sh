@@ -90,6 +90,23 @@ devup() {
         return 1
     }
     
+    # 清理旧的临时包文件 | Clean up old temporary package files
+    echo "🧹 清理旧的 alpha 版本文件... | Cleaning up old alpha version files..."
+    local cleanup_count=0
+    if command -v find >/dev/null 2>&1; then
+        # 查找并计数超过1天的 alpha 版本文件
+        cleanup_count=$(find "$package_dir" -name "*-alpha.*.tgz" -type f -mtime +1 2>/dev/null | wc -l | tr -d ' ')
+        # 删除超过1天的 alpha 版本文件
+        find "$package_dir" -name "*-alpha.*.tgz" -type f -mtime +1 -delete 2>/dev/null || true
+        if [ "$cleanup_count" -gt 0 ]; then
+            echo "✅ 清理了 $cleanup_count 个旧的 alpha 版本文件 | Cleaned up $cleanup_count old alpha version files"
+        else
+            echo "💡 没有发现需要清理的旧文件 | No old files found to clean up"
+        fi
+    else
+        echo "⚠️  find 命令不可用，跳过清理步骤 | find command not available, skipping cleanup"
+    fi
+    
     # 备份和修改版本号以避免缓存问题 | Backup and modify version to avoid cache issues
     echo "🔖 备份并修改 package.json 版本号... | Backing up and modifying package.json version..."
     local timestamp=$(date +%Y%m%d%H%M%S)
@@ -242,10 +259,22 @@ devup() {
         
         # 强制安装包（确保覆盖缓存）
         echo "🚀 强制安装 alpha 版本包... | Force installing alpha version package..."
+        local install_success=false
         if [ -f "./pnpm" ]; then
-            ./pnpm add "$tgz_file" --force
+            ./pnpm add "$tgz_file" --force && install_success=true
         else
-            pnpm add "$tgz_file" --force
+            pnpm add "$tgz_file" --force && install_success=true
+        fi
+        
+        # 安装成功后立即清理当前包文件 | Clean up current package file after successful installation
+        if [ "$install_success" = true ] && [ -f "$tgz_file" ]; then
+            echo "🧹 清理当前包文件: $(basename "$tgz_file") | Cleaning up current package file: $(basename "$tgz_file")"
+            rm -f "$tgz_file" || {
+                echo "⚠️  警告: 无法删除包文件 $tgz_file | Warning: Failed to delete package file $tgz_file"
+            }
+        elif [ "$install_success" = false ]; then
+            echo "❌ 包安装失败，保留包文件用于调试 | Package installation failed, keeping package file for debugging"
+            return 1
         fi
     else
         echo "❌ 未找到 .tgz 文件 | No .tgz file found"
@@ -536,6 +565,12 @@ _devup_show_config() {
 # - 强制安装参数 --force 确保覆盖缓存 | Force install with --force to override cache
 # - 需要 jq 工具来安全地修改 JSON 文件 | Requires jq tool for safe JSON modification
 # - 可使用 devup_reload 重新加载函数 | Use devup_reload to refresh functions
+#
+# 🧹 文件清理机制 | File Cleanup Mechanism:
+# - 每次运行前自动清理超过1天的旧 alpha 版本文件 | Auto-cleanup alpha version files older than 1 day before each run
+# - 包安装成功后立即删除当前使用的包文件 | Immediately delete current package file after successful installation
+# - 安装失败时保留包文件用于调试 | Keep package file for debugging when installation fails
+# - 防止 .tgz 文件在包目录中无限累积 | Prevents unlimited accumulation of .tgz files in package directory
 #
 # 📋 配置文件示例 | Configuration File Example:
 # {
