@@ -324,6 +324,91 @@ devup_config() {
 # 配置管理辅助函数 | Configuration Management Helper Functions
 # ==============================================
 
+# === STREAM A: Configuration Type Detection ===
+# 验证链式配置格式 | Validate chain configuration format
+_validate_chain_config() {
+    local config_data="$1"
+    
+    # 检查 type 字段是否为 "chain" | Check if type field is "chain"
+    local config_type
+    config_type=$(echo "$config_data" | jq -r '.type // "legacy"')
+    if [ "$config_type" != "chain" ]; then
+        echo "❌ 配置类型错误，期望 'chain'，实际 '$config_type' | Invalid config type, expected 'chain', got '$config_type'"
+        return 1
+    fi
+    
+    # 检查 chain 数组是否存在 | Check if chain array exists
+    local chain_data
+    chain_data=$(echo "$config_data" | jq '.chain')
+    if [ "$chain_data" = "null" ]; then
+        echo "❌ 链式配置缺少 'chain' 数组 | Chain config missing 'chain' array"
+        return 1
+    fi
+    
+    # 检查 chain 数组是否为空 | Check if chain array is empty
+    local chain_length
+    chain_length=$(echo "$config_data" | jq '.chain | length')
+    if [ "$chain_length" -eq 0 ]; then
+        echo "❌ 链式配置的 'chain' 数组不能为空 | Chain config 'chain' array cannot be empty"
+        return 1
+    fi
+    
+    # 验证每个链节点的必需字段 | Validate required fields for each chain node
+    for ((i=0; i<chain_length; i++)); do
+        local node_data
+        node_data=$(echo "$config_data" | jq ".chain[$i]")
+        
+        # 检查节点类型 | Check node type
+        local node_type
+        node_type=$(echo "$node_data" | jq -r '.type')
+        if [ "$node_type" = "null" ]; then
+            echo "❌ 链节点 [$i] 缺少 'type' 字段 | Chain node [$i] missing 'type' field"
+            return 1
+        fi
+        
+        if [ "$node_type" != "package" ] && [ "$node_type" != "app" ]; then
+            echo "❌ 链节点 [$i] 类型无效: '$node_type'，只支持 'package' 或 'app' | Chain node [$i] invalid type: '$node_type', only 'package' or 'app' supported"
+            return 1
+        fi
+        
+        # 检查节点名称 | Check node name
+        local node_name
+        node_name=$(echo "$node_data" | jq -r '.name')
+        if [ "$node_name" = "null" ] || [ -z "$node_name" ]; then
+            echo "❌ 链节点 [$i] 缺少 'name' 字段 | Chain node [$i] missing 'name' field"
+            return 1
+        fi
+        
+        # 根据节点类型检查必需字段 | Check required fields based on node type
+        if [ "$node_type" = "package" ]; then
+            local package_dir package_name
+            package_dir=$(echo "$node_data" | jq -r '.package_dir')
+            package_name=$(echo "$node_data" | jq -r '.package_name')
+            
+            if [ "$package_dir" = "null" ] || [ -z "$package_dir" ]; then
+                echo "❌ 包节点 [$i] '$node_name' 缺少 'package_dir' 字段 | Package node [$i] '$node_name' missing 'package_dir' field"
+                return 1
+            fi
+            
+            if [ "$package_name" = "null" ] || [ -z "$package_name" ]; then
+                echo "❌ 包节点 [$i] '$node_name' 缺少 'package_name' 字段 | Package node [$i] '$node_name' missing 'package_name' field"
+                return 1
+            fi
+        elif [ "$node_type" = "app" ]; then
+            local app_dir
+            app_dir=$(echo "$node_data" | jq -r '.app_dir')
+            
+            if [ "$app_dir" = "null" ] || [ -z "$app_dir" ]; then
+                echo "❌ 应用节点 [$i] '$node_name' 缺少 'app_dir' 字段 | App node [$i] '$node_name' missing 'app_dir' field"
+                return 1
+            fi
+        fi
+    done
+    
+    echo "✅ 链式配置验证通过 | Chain config validation passed"
+    return 0
+}
+
 # 加载配置 | Load configuration
 _devup_load_config() {
     local requested_config_name="$1"
@@ -392,6 +477,35 @@ _devup_load_config() {
         return 1
     fi
     
+    # === STREAM A: Configuration Type Detection ===
+    # 检测配置类型 | Detect configuration type
+    local config_type
+    config_type=$(echo "$config_data" | jq -r '.type // "legacy"')
+    
+    if [ "$config_type" = "chain" ]; then
+        # 链式配置：验证格式并委托给链式配置处理器 | Chain config: validate format and delegate to chain handler
+        echo "🔗 检测到链式配置，正在验证... | Chain configuration detected, validating..."
+        if ! _validate_chain_config "$config_data"; then
+            return 1
+        fi
+        
+        # 注意：链式配置的具体解析逻辑将由 Stream B 实现
+        # 这里只是检测和验证，暂时返回错误提示用户功能尚未完成
+        # Note: Chain config parsing logic will be implemented by Stream B
+        # This is only detection and validation, temporarily return error indicating feature incomplete
+        echo "❌ 链式配置解析功能尚未实现，请等待 Stream B 完成 | Chain config parsing not yet implemented, please wait for Stream B"
+        return 1
+        
+    elif [ "$config_type" = "legacy" ]; then
+        # 传统单包配置：继续现有逻辑 | Legacy single package config: continue with existing logic
+        echo "📦 使用传统单包配置模式 | Using legacy single package config mode"
+    else
+        # 未知配置类型 | Unknown config type
+        echo "❌ 未知的配置类型: '$config_type'，支持的类型: 'chain' 或留空(默认单包模式) | Unknown config type: '$config_type', supported types: 'chain' or empty (default single package mode)"
+        return 1
+    fi
+    
+    # 传统单包配置处理逻辑 | Legacy single package config processing logic
     # 提取配置值并展开环境变量 | Extract config values and expand environment variables
     # 注意：避免与调用方变量同名，防止作用域遮蔽 | Avoid name shadowing with caller variables
     local _package_dir _app_dir _package_name _start_command _build_command _config_name_actual
