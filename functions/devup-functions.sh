@@ -324,7 +324,242 @@ devup_config() {
 # 配置管理辅助函数 | Configuration Management Helper Functions
 # ==============================================
 
+# === STREAM A: Configuration Type Detection ===
+# 验证链式配置格式 | Validate chain configuration format
+_validate_chain_config() {
+    local config_data="$1"
+    
+    # 检查 type 字段是否为 "chain" | Check if type field is "chain"
+    local config_type
+    config_type=$(echo "$config_data" | jq -r '.type // "legacy"')
+    if [ "$config_type" != "chain" ]; then
+        echo "❌ 配置类型错误，期望 'chain'，实际 '$config_type' | Invalid config type, expected 'chain', got '$config_type'"
+        return 1
+    fi
+    
+    # 检查 chain 数组是否存在 | Check if chain array exists
+    local chain_data
+    chain_data=$(echo "$config_data" | jq '.chain')
+    if [ "$chain_data" = "null" ]; then
+        echo "❌ 链式配置缺少 'chain' 数组 | Chain config missing 'chain' array"
+        return 1
+    fi
+    
+    # 检查 chain 数组是否为空 | Check if chain array is empty
+    local chain_length
+    chain_length=$(echo "$config_data" | jq '.chain | length')
+    if [ "$chain_length" -eq 0 ]; then
+        echo "❌ 链式配置的 'chain' 数组不能为空 | Chain config 'chain' array cannot be empty"
+        return 1
+    fi
+    
+    # 验证每个链节点的必需字段 | Validate required fields for each chain node
+    for ((i=0; i<chain_length; i++)); do
+        local node_data
+        node_data=$(echo "$config_data" | jq ".chain[$i]")
+        
+        # 检查节点类型 | Check node type
+        local node_type
+        node_type=$(echo "$node_data" | jq -r '.type')
+        if [ "$node_type" = "null" ]; then
+            echo "❌ 链节点 [$i] 缺少 'type' 字段 | Chain node [$i] missing 'type' field"
+            return 1
+        fi
+        
+        if [ "$node_type" != "package" ] && [ "$node_type" != "app" ]; then
+            echo "❌ 链节点 [$i] 类型无效: '$node_type'，只支持 'package' 或 'app' | Chain node [$i] invalid type: '$node_type', only 'package' or 'app' supported"
+            return 1
+        fi
+        
+        # 检查节点名称 | Check node name
+        local node_name
+        node_name=$(echo "$node_data" | jq -r '.name')
+        if [ "$node_name" = "null" ] || [ -z "$node_name" ]; then
+            echo "❌ 链节点 [$i] 缺少 'name' 字段 | Chain node [$i] missing 'name' field"
+            return 1
+        fi
+        
+        # 根据节点类型检查必需字段 | Check required fields based on node type
+        if [ "$node_type" = "package" ]; then
+            local package_dir package_name
+            package_dir=$(echo "$node_data" | jq -r '.package_dir')
+            package_name=$(echo "$node_data" | jq -r '.package_name')
+            
+            if [ "$package_dir" = "null" ] || [ -z "$package_dir" ]; then
+                echo "❌ 包节点 [$i] '$node_name' 缺少 'package_dir' 字段 | Package node [$i] '$node_name' missing 'package_dir' field"
+                return 1
+            fi
+            
+            if [ "$package_name" = "null" ] || [ -z "$package_name" ]; then
+                echo "❌ 包节点 [$i] '$node_name' 缺少 'package_name' 字段 | Package node [$i] '$node_name' missing 'package_name' field"
+                return 1
+            fi
+        elif [ "$node_type" = "app" ]; then
+            local app_dir
+            app_dir=$(echo "$node_data" | jq -r '.app_dir')
+            
+            if [ "$app_dir" = "null" ] || [ -z "$app_dir" ]; then
+                echo "❌ 应用节点 [$i] '$node_name' 缺少 'app_dir' 字段 | App node [$i] '$node_name' missing 'app_dir' field"
+                return 1
+            fi
+        fi
+    done
+    
+    echo "✅ 链式配置验证通过 | Chain config validation passed"
+    return 0
+}
+
+# === STREAM B: Chain Config Parser ===
+# 解析链式配置数据 | Parse chain configuration data
+_parse_chain_config() {
+    local config_data="$1"
+    local result_ref_name="$2"  # 用于返回解析结果的变量名 | Variable name for returning parsed result
+    
+    # 获取链数组长度 | Get chain array length
+    local chain_length
+    chain_length=$(echo "$config_data" | jq '.chain | length')
+    
+    echo "🔗 开始解析链式配置，包含 $chain_length 个节点 | Starting to parse chain config with $chain_length nodes"
+    
+    # 初始化解析结果数组 | Initialize parsed result array
+    local parsed_nodes=()
+    local node_names=()
+    
+    # 逐个解析链节点 | Parse each chain node
+    for ((i=0; i<chain_length; i++)); do
+        local node_data
+        node_data=$(echo "$config_data" | jq ".chain[$i]")
+        
+        # 提取基本信息 | Extract basic information
+        local node_type node_name
+        node_type=$(echo "$node_data" | jq -r '.type')
+        node_name=$(echo "$node_data" | jq -r '.name')
+        
+        echo "  📦 解析节点 [$i]: $node_name (类型: $node_type) | Parsing node [$i]: $node_name (type: $node_type)"
+        
+        # 根据节点类型解析特定字段 | Parse specific fields based on node type
+        local parsed_node=""
+        if [ "$node_type" = "package" ]; then
+            local package_dir package_name build_command
+            # 展开环境变量 | Expand environment variables
+            package_dir=$(echo "$node_data" | jq -r '.package_dir' | envsubst)
+            package_name=$(echo "$node_data" | jq -r '.package_name')
+            build_command=$(echo "$node_data" | jq -r '.build_command // "./pnpm run build"')
+            
+            # 构建解析后的节点数据 | Build parsed node data
+            parsed_node=$(jq -n \
+                --arg type "$node_type" \
+                --arg name "$node_name" \
+                --arg package_dir "$package_dir" \
+                --arg package_name "$package_name" \
+                --arg build_command "$build_command" \
+                '{
+                    type: $type,
+                    name: $name,
+                    package_dir: $package_dir,
+                    package_name: $package_name,
+                    build_command: $build_command
+                }')
+                
+        elif [ "$node_type" = "app" ]; then
+            local app_dir start_command
+            # 展开环境变量 | Expand environment variables
+            app_dir=$(echo "$node_data" | jq -r '.app_dir' | envsubst)
+            start_command=$(echo "$node_data" | jq -r '.start_command // "./pnpm start"')
+            
+            # 构建解析后的节点数据 | Build parsed node data
+            parsed_node=$(jq -n \
+                --arg type "$node_type" \
+                --arg name "$node_name" \
+                --arg app_dir "$app_dir" \
+                --arg start_command "$start_command" \
+                '{
+                    type: $type,
+                    name: $name,
+                    app_dir: $app_dir,
+                    start_command: $start_command
+                }')
+        fi
+        
+        # 处理依赖关系 | Process dependencies
+        local dependencies_json
+        dependencies_json=$(echo "$node_data" | jq '.dependencies // []')
+        parsed_node=$(echo "$parsed_node" | jq --argjson deps "$dependencies_json" '. + {dependencies: $deps}')
+        
+        # 保存解析后的节点 | Save parsed node
+        parsed_nodes+=("$parsed_node")
+        node_names+=("$node_name")
+        
+        echo "    ✅ 节点 $node_name 解析完成 | Node $node_name parsed successfully"
+    done
+    
+    # 验证依赖关系引用的有效性 | Validate dependency references
+    echo "🔍 验证依赖关系... | Validating dependencies..."
+    for ((i=0; i<chain_length; i++)); do
+        local node_name="${node_names[i]}"
+        local node_json="${parsed_nodes[i]}"
+        local dependencies
+        dependencies=$(echo "$node_json" | jq -r '.dependencies[]?' 2>/dev/null)
+        
+        if [ -n "$dependencies" ]; then
+            echo "$dependencies" | while IFS= read -r dep_name; do
+                # 检查依赖是否在已知节点列表中 | Check if dependency exists in known nodes
+                local found=false
+                for known_name in "${node_names[@]}"; do
+                    if [ "$known_name" = "$dep_name" ]; then
+                        found=true
+                        break
+                    fi
+                done
+                
+                if [ "$found" = false ]; then
+                    echo "❌ 节点 '$node_name' 引用了未知的依赖: '$dep_name' | Node '$node_name' references unknown dependency: '$dep_name'"
+                    return 1
+                fi
+                
+                # 检查是否存在循环依赖 (简单检查：依赖不能指向后面的节点) | Check for circular dependencies (simple check: dependency cannot point to later nodes)
+                local dep_index=-1
+                for ((j=0; j<${#node_names[@]}; j++)); do
+                    if [ "${node_names[j]}" = "$dep_name" ]; then
+                        dep_index=$j
+                        break
+                    fi
+                done
+                
+                if [ "$dep_index" -ge "$i" ]; then
+                    echo "❌ 检测到无效的依赖顺序: 节点 '$node_name' (位置$i) 不能依赖位置 $dep_index 的节点 '$dep_name' | Invalid dependency order detected: node '$node_name' (position $i) cannot depend on node '$dep_name' at position $dep_index"
+                    return 1
+                fi
+                
+                echo "    ✅ 依赖关系验证通过: $node_name -> $dep_name | Dependency validation passed: $node_name -> $dep_name"
+            done
+        fi
+    done
+    
+    # 构建最终的解析结果 | Build final parsed result
+    local final_result
+    final_result=$(jq -n \
+        --argjson nodes "$(printf '%s\n' "${parsed_nodes[@]}" | jq -s '.')" \
+        --argjson node_count "$chain_length" \
+        '{
+            type: "chain",
+            node_count: $node_count,
+            nodes: $nodes
+        }')
+    
+    # 通过引用返回结果 | Return result via reference
+    eval "$result_ref_name='$final_result'"
+    
+    echo "✅ 链式配置解析完成，共 $chain_length 个节点 | Chain config parsing completed with $chain_length nodes"
+    return 0
+}
+
+# === STREAM C: API Integration ===
 # 加载配置 | Load configuration
+# API 签名：支持链式配置和向后兼容性 | API signature: supports chain configs and backward compatibility
+# 用法 | Usage:
+#   单包模式 | Single package mode: _devup_load_config "config_name" pkg_dir app_dir pkg_name [start_cmd] [build_cmd]
+#   链式模式 | Chain mode: _devup_load_config "config_name" pkg_dir app_dir pkg_name [start_cmd] [build_cmd] [chain_result_ref] [config_type_ref]
 _devup_load_config() {
     local requested_config_name="$1"
     local pkg_dir_ref_name="$2"
@@ -332,6 +567,8 @@ _devup_load_config() {
     local pkg_name_ref_name="$4"
     local start_cmd_ref_name="$5"
     local build_cmd_ref_name="$6"
+    local chain_result_ref_name="$7"  # 新增：链式配置完整结果 | New: complete chain config result
+    local config_type_ref_name="$8"   # 新增：配置类型返回 | New: config type return
     
     local config_file="$HOME/.quick-functions/devup-configs.json"
     
@@ -392,6 +629,148 @@ _devup_load_config() {
         return 1
     fi
     
+    # === STREAM A: Configuration Type Detection ===
+    # 检测配置类型 | Detect configuration type
+    local config_type
+    config_type=$(echo "$config_data" | jq -r '.type // "legacy"')
+    
+    if [ "$config_type" = "chain" ]; then
+        # 链式配置：验证格式并委托给链式配置处理器 | Chain config: validate format and delegate to chain handler
+        echo "🔗 检测到链式配置，正在验证... | Chain configuration detected, validating..."
+        if ! _validate_chain_config "$config_data"; then
+            return 1
+        fi
+        
+        # === STREAM B: Chain Config Parser Integration ===
+        # 调用链式配置解析器 | Call chain config parser
+        local parsed_chain_result
+        if ! _parse_chain_config "$config_data" "parsed_chain_result"; then
+            echo "❌ 链式配置解析失败 | Chain config parsing failed"
+            return 1
+        fi
+        
+        # === STREAM C: 链式配置完整API实现 | Chain Config Complete API Implementation ===
+        echo "✅ 链式配置解析成功 | Chain config parsing successful"
+        
+        # 返回配置类型 | Return config type
+        if [ -n "$config_type_ref_name" ]; then
+            eval "$config_type_ref_name='chain'"
+            echo "🏷️  配置类型已设置: chain | Config type set: chain"
+        fi
+        
+        # 返回完整的链式配置结果 | Return complete chain config result
+        if [ -n "$chain_result_ref_name" ]; then
+            eval "$chain_result_ref_name='$parsed_chain_result'"
+            local node_count
+            node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+            echo "📊 链式配置完整结果已返回，包含 $node_count 个节点 | Complete chain config result returned with $node_count nodes"
+        fi
+        
+        # 为向后兼容性，智能选择合适的节点返回基本信息 | For backward compatibility, intelligently select appropriate node for basic info
+        local selected_node selected_node_type
+        
+        # 优先选择第一个包节点，如果没有则选择第一个应用节点 | Prefer first package node, fallback to first app node
+        local node_count
+        node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+        
+        if [ "$node_count" -eq 0 ]; then
+            echo "❌ 错误：链式配置中没有节点 | Error: No nodes in chain config"
+            return 1
+        fi
+        
+        echo "🔍 在 $node_count 个节点中选择主要节点... | Selecting primary node from $node_count nodes..."
+        
+        for ((i=0; i<node_count; i++)); do
+            local node_data node_type node_name
+            node_data=$(echo "$parsed_chain_result" | jq ".nodes[$i]")
+            node_type=$(echo "$node_data" | jq -r '.type')
+            node_name=$(echo "$node_data" | jq -r '.name')
+            
+            if [ "$node_type" = "package" ]; then
+                selected_node="$node_data"
+                selected_node_type="package"
+                echo "📦 选择包节点 '$node_name' (位置 $((i+1))) 作为主要节点 | Selected package node '$node_name' (position $((i+1))) as primary node"
+                break
+            fi
+        done
+        
+        # 如果没有找到包节点，使用第一个应用节点 | If no package node found, use first app node
+        if [ -z "$selected_node" ]; then
+            selected_node=$(echo "$parsed_chain_result" | jq '.nodes[0]')
+            selected_node_type=$(echo "$selected_node" | jq -r '.type')
+            local first_node_name
+            first_node_name=$(echo "$selected_node" | jq -r '.name')
+            echo "🏗️  使用应用节点 '$first_node_name' 作为主要节点 | Using app node '$first_node_name' as primary node"
+        fi
+        
+        # 根据选中的节点类型设置返回值 | Set return values based on selected node type
+        if [ "$selected_node_type" = "package" ]; then
+            local _package_dir _package_name _build_command
+            _package_dir=$(echo "$selected_node" | jq -r '.package_dir')
+            _package_name=$(echo "$selected_node" | jq -r '.package_name')
+            _build_command=$(echo "$selected_node" | jq -r '.build_command')
+            
+            # 验证提取的数据 | Validate extracted data
+            if [ "$_package_dir" = "null" ] || [ -z "$_package_dir" ]; then
+                echo "❌ 错误：选择的包节点缺少 package_dir | Error: Selected package node missing package_dir"
+                return 1
+            fi
+            if [ "$_package_name" = "null" ] || [ -z "$_package_name" ]; then
+                echo "❌ 错误：选择的包节点缺少 package_name | Error: Selected package node missing package_name"
+                return 1
+            fi
+            
+            eval "$pkg_dir_ref_name='$_package_dir'"
+            eval "$pkg_name_ref_name='$_package_name'"
+            [ -n "$build_cmd_ref_name" ] && eval "$build_cmd_ref_name='$_build_command'"
+            
+            echo "✅ 向后兼容：返回包节点信息 | Backward compatibility: returning package node info"
+            echo "   📁 包目录: $_package_dir | Package directory: $_package_dir"
+            echo "   📦 包名称: $_package_name | Package name: $_package_name"
+            
+        elif [ "$selected_node_type" = "app" ]; then
+            local _app_dir _start_command
+            _app_dir=$(echo "$selected_node" | jq -r '.app_dir')
+            _start_command=$(echo "$selected_node" | jq -r '.start_command')
+            
+            # 验证提取的数据 | Validate extracted data
+            if [ "$_app_dir" = "null" ] || [ -z "$_app_dir" ]; then
+                echo "❌ 错误：选择的应用节点缺少 app_dir | Error: Selected app node missing app_dir"
+                return 1
+            fi
+            
+            eval "$app_dir_ref_name='$_app_dir'"
+            [ -n "$start_cmd_ref_name" ] && eval "$start_cmd_ref_name='$_start_command'"
+            
+            echo "✅ 向后兼容：返回应用节点信息 | Backward compatibility: returning app node info"
+            echo "   📁 应用目录: $_app_dir | App directory: $_app_dir"
+            
+        else
+            echo "❌ 错误：未知的节点类型 '$selected_node_type' | Error: Unknown node type '$selected_node_type'"
+            return 1
+        fi
+        
+        return 0
+        
+    elif [ "$config_type" = "legacy" ]; then
+        # 传统单包配置：继续现有逻辑 | Legacy single package config: continue with existing logic
+        echo "📦 使用传统单包配置模式 | Using legacy single package config mode"
+        
+        # 返回配置类型 | Return config type
+        if [ -n "$config_type_ref_name" ]; then
+            eval "$config_type_ref_name='legacy'"
+            echo "🏷️  配置类型已设置: legacy | Config type set: legacy"
+        fi
+        
+        # 为链式配置API提供空值 | Provide empty values for chain config API
+        [ -n "$chain_result_ref_name" ] && eval "$chain_result_ref_name=''"
+    else
+        # 未知配置类型 | Unknown config type
+        echo "❌ 未知的配置类型: '$config_type'，支持的类型: 'chain' 或留空(默认单包模式) | Unknown config type: '$config_type', supported types: 'chain' or empty (default single package mode)"
+        return 1
+    fi
+    
+    # 传统单包配置处理逻辑 | Legacy single package config processing logic
     # 提取配置值并展开环境变量 | Extract config values and expand environment variables
     # 注意：避免与调用方变量同名，防止作用域遮蔽 | Avoid name shadowing with caller variables
     local _package_dir _app_dir _package_name _start_command _build_command _config_name_actual
@@ -413,6 +792,9 @@ _devup_load_config() {
     eval "$pkg_name_ref_name='$_package_name'"
     [ -n "$start_cmd_ref_name" ] && eval "$start_cmd_ref_name='$_start_command'"
     [ -n "$build_cmd_ref_name" ] && eval "$build_cmd_ref_name='$_build_command'"
+    
+    # 为链式配置API提供空值 | Provide empty values for chain config API
+    [ -n "$chain_result_ref_name" ] && eval "$chain_result_ref_name=''"
     
     echo "📝 使用配置: $_config_name_actual | Using config: $_config_name_actual"
     return 0
