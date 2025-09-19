@@ -1,0 +1,31 @@
+{
+  "configs": [
+    {
+      "name": "modal-orders",
+      "description": "Modal Orders React Package Development",
+      "package_dir": "$HOME/development/uc-frontend/packages/modal--agent-orders.react",
+      "app_dir": "$HOME/development/uc-frontend/apps/lab",
+      "package_name": "@uc/modal--agent-orders.react",
+      "start_command": "./pnpm start",
+      "build_command": "./pnpm run build"
+    },
+    {
+      "name": "ui-components",
+      "description": "UI Components Package Development",
+      "package_dir": "$HOME/development/my-project/packages/ui-components",
+      "app_dir": "$HOME/development/my-project/apps/storybook",
+      "package_name": "@myorg/ui-components",
+      "start_command": "./pnpm storybook",
+      "build_command": "./pnpm run build"
+    },
+    {
+      "name": "utils-lib",
+      "description": "Utilities Library Development",
+      "package_dir": "$HOME/development/shared/packages/utils",
+      "app_dir": "$HOME/development/shared/apps/playground",
+      "package_name": "@shared/utils",
+      "start_command": "npm start",
+      "build_command": "npm run build"
+    }
+  ]
+}
