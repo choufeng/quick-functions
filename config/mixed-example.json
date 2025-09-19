@@ -1,0 +1,51 @@
+{
+  "configs": [
+    {
+      "name": "legacy-single",
+      "description": "Traditional single package configuration",
+      "package_dir": "$HOME/development/legacy-project/packages/main-lib",
+      "app_dir": "$HOME/development/legacy-project/apps/demo",
+      "package_name": "@legacy/main-lib",
+      "start_command": "./pnpm start",
+      "build_command": "./pnpm run build"
+    },
+    {
+      "name": "modern-chain",
+      "description": "Modern multi-package chain configuration",
+      "type": "chain",
+      "chain": [
+        {
+          "type": "package",
+          "name": "foundation",
+          "package_dir": "$HOME/development/modern-project/packages/foundation",
+          "package_name": "@modern/foundation",
+          "build_command": "./pnpm run build"
+        },
+        {
+          "type": "package",
+          "name": "components",
+          "package_dir": "$HOME/development/modern-project/packages/components",
+          "package_name": "@modern/components",
+          "build_command": "./pnpm run build",
+          "dependencies": ["foundation"]
+        },
+        {
+          "type": "app",
+          "name": "showcase",
+          "app_dir": "$HOME/development/modern-project/apps/showcase",
+          "start_command": "./pnpm dev",
+          "dependencies": ["components"]
+        }
+      ]
+    },
+    {
+      "name": "test-setup",
+      "description": "Test environment setup",
+      "package_dir": "$HOME/development/test-env/packages/test-utils",
+      "app_dir": "$HOME/development/test-env/apps/test-runner",
+      "package_name": "@test/utils",
+      "start_command": "./pnpm test:watch",
+      "build_command": "./pnpm run build:test"
+    }
+  ]
+}

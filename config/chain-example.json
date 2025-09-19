@@ -1,0 +1,62 @@
+{
+  "configs": [
+    {
+      "name": "frontend-chain",
+      "description": "Frontend multi-package chain configuration",
+      "type": "chain",
+      "chain": [
+        {
+          "type": "package",
+          "name": "ui-components",
+          "package_dir": "$HOME/development/my-project/packages/ui-components",
+          "package_name": "@myorg/ui-components",
+          "build_command": "./pnpm run build"
+        },
+        {
+          "type": "package",
+          "name": "business-logic",
+          "package_dir": "$HOME/development/my-project/packages/business-logic",
+          "package_name": "@myorg/business-logic",
+          "build_command": "./pnpm run build",
+          "dependencies": ["ui-components"]
+        },
+        {
+          "type": "package",
+          "name": "feature-module",
+          "package_dir": "$HOME/development/my-project/packages/feature-module",
+          "package_name": "@myorg/feature-module",
+          "build_command": "./pnpm run build",
+          "dependencies": ["ui-components", "business-logic"]
+        },
+        {
+          "type": "app",
+          "name": "main-app",
+          "app_dir": "$HOME/development/my-project/apps/web-app",
+          "start_command": "./pnpm start",
+          "dependencies": ["feature-module"]
+        }
+      ]
+    },
+    {
+      "name": "simple-chain",
+      "description": "Simple two-package chain",
+      "type": "chain",
+      "chain": [
+        {
+          "type": "package",
+          "name": "core-lib",
+          "package_dir": "$HOME/development/simple-project/packages/core",
+          "package_name": "@simple/core",
+          "build_command": "./pnpm run build"
+        },
+        {
+          "type": "app",
+          "name": "demo-app",
+          "app_dir": "$HOME/development/simple-project/apps/demo",
+          "start_command": "./pnpm dev",
+          "dependencies": ["core-lib"]
+        }
+      ]
+    }
+  ]
+}
