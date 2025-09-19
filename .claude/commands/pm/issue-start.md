@@ -15,21 +15,21 @@ Begin work on a GitHub issue with parallel agents based on work stream analysis.
 
 1. **Get issue details:**
    ```bash
-   gh issue view $ARGUMENTS --json state,title,labels,body
+   gh issue view 4 --json state,title,labels,body
    ```
-   If it fails: "❌ Cannot access issue #$ARGUMENTS. Check number or run: gh auth login"
+   If it fails: "❌ Cannot access issue #4. Check number or run: gh auth login"
 
 2. **Find local task file:**
-   - First check if `.claude/epics/*/$ARGUMENTS.md` exists (new naming)
-   - If not found, search for file containing `github:.*issues/$ARGUMENTS` in frontmatter (old naming)
-   - If not found: "❌ No local task for issue #$ARGUMENTS. This issue may have been created outside the PM system."
+   - First check if `.claude/epics/*/4.md` exists (new naming)
+   - If not found, search for file containing `github:.*issues/4` in frontmatter (old naming)
+   - If not found: "❌ No local task for issue #4. This issue may have been created outside the PM system."
 
 3. **Check for analysis:**
    ```bash
-   test -f .claude/epics/*/$ARGUMENTS-analysis.md || echo "❌ No analysis found for issue #$ARGUMENTS
+   test -f .claude/epics/*/4-analysis.md || echo "❌ No analysis found for issue #4
    
-   Run: /pm:issue-analyze $ARGUMENTS first
-   Or: /pm:issue-start $ARGUMENTS --analyze to do both"
+   Run: /pm:issue-analyze 4 first
+   Or: /pm:issue-start 4 --analyze to do both"
    ```
    If no analysis exists and no --analyze flag, stop execution.
 
@@ -51,7 +51,7 @@ fi
 
 ### 2. Read Analysis
 
-Read `.claude/epics/{epic_name}/$ARGUMENTS-analysis.md`:
+Read `.claude/epics/{epic_name}/4-analysis.md`:
 - Parse parallel streams
 - Identify which can start immediately
 - Note dependencies between streams
@@ -62,7 +62,7 @@ Get current datetime: `date -u +"%Y-%m-%dT%H:%M:%SZ"`
 
 Create workspace structure:
 ```bash
-mkdir -p .claude/epics/{epic_name}/updates/$ARGUMENTS
+mkdir -p .claude/epics/{epic_name}/updates/4
 ```
 
 Update task file frontmatter `updated` field with current datetime.
@@ -71,10 +71,10 @@ Update task file frontmatter `updated` field with current datetime.
 
 For each stream that can start immediately:
 
-Create `.claude/epics/{epic_name}/updates/$ARGUMENTS/stream-{X}.md`:
+Create `.claude/epics/{epic_name}/updates/4/stream-{X}.md`:
 ```markdown
 ---
-issue: $ARGUMENTS
+issue: 4
 stream: {stream_name}
 agent: {agent_type}
 started: {current_datetime}
@@ -96,10 +96,10 @@ status: in_progress
 Launch agent using Task tool:
 ```yaml
 Task:
-  description: "Issue #$ARGUMENTS Stream {X}"
+  description: "Issue #4 Stream {X}"
   subagent_type: "{agent_type}"
   prompt: |
-    You are working on Issue #$ARGUMENTS in the epic worktree.
+    You are working on Issue #4 in the epic worktree.
     
     Worktree location: ../epic-{epic_name}/
     Your stream: {stream_name}
@@ -111,8 +111,8 @@ Task:
     Requirements:
     1. Read full task from: .claude/epics/{epic_name}/{task_file}
     2. Work ONLY in your assigned files
-    3. Commit frequently with format: "Issue #$ARGUMENTS: {specific change}"
-    4. Update progress in: .claude/epics/{epic_name}/updates/$ARGUMENTS/stream-{X}.md
+    3. Commit frequently with format: "Issue #4: {specific change}"
+    4. Update progress in: .claude/epics/{epic_name}/updates/4/stream-{X}.md
     5. Follow coordination rules in /rules/agent-coordination.md
     
     If you need to modify files outside your scope:
@@ -127,13 +127,13 @@ Task:
 
 ```bash
 # Assign to self and mark in-progress
-gh issue edit $ARGUMENTS --add-assignee @me --add-label "in-progress"
+gh issue edit 4 --add-assignee @me --add-label "in-progress"
 ```
 
 ### 6. Output
 
 ```
-✅ Started parallel work on issue #$ARGUMENTS
+✅ Started parallel work on issue #4
 
 Epic: {epic_name}
 Worktree: ../epic-{epic_name}/
@@ -144,10 +144,10 @@ Launching {count} parallel agents:
   Stream C: {name} - Waiting (depends on A)
 
 Progress tracking:
-  .claude/epics/{epic_name}/updates/$ARGUMENTS/
+  .claude/epics/{epic_name}/updates/4/
 
 Monitor with: /pm:epic-status {epic_name}
-Sync updates: /pm:issue-sync $ARGUMENTS
+Sync updates: /pm:issue-sync 4
 ```
 
 ## Error Handling
