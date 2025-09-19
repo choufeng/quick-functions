@@ -6,6 +6,7 @@
  */
 
 const { GraphUtils } = require('./utils/graph-utils');
+const { DependencyErrorHandler, ErrorType, ErrorSeverity } = require('./dependency-errors');
 
 /**
  * 访问状态枚举
@@ -17,11 +18,12 @@ const VisitState = {
 };
 
 class DependencyResolver {
-    constructor() {
+    constructor(options = {}) {
         this.visitStates = new Map();
         this.buildOrder = [];
         this.cyclePath = [];
         this.graphUtils = new GraphUtils();
+        this.errorHandler = new DependencyErrorHandler(options);
     }
 
     /**
@@ -31,21 +33,24 @@ class DependencyResolver {
      */
     resolveBuildOrder(packagesConfig) {
         try {
-            // 输入验证
-            if (!packagesConfig || typeof packagesConfig !== 'object') {
-                return {
-                    success: false,
-                    error: 'Invalid packages configuration: must be an object'
-                };
+            // 使用增强的错误处理器进行输入验证
+            const configValidation = this.errorHandler.validatePackagesConfig(packagesConfig);
+            if (!configValidation.valid) {
+                const criticalErrors = configValidation.errors.filter(
+                    e => e.severity === ErrorSeverity.CRITICAL || e.severity === ErrorSeverity.ERROR
+                );
+                
+                if (criticalErrors.length > 0) {
+                    return {
+                        success: false,
+                        error: criticalErrors[0].message,
+                        detailedErrors: configValidation.errors,
+                        errorReport: this.errorHandler.generateDetailedReport(configValidation.errors)
+                    };
+                }
             }
 
             const packages = packagesConfig.packages || packagesConfig;
-            if (!packages || typeof packages !== 'object') {
-                return {
-                    success: false,
-                    error: 'No packages found in configuration'
-                };
-            }
 
             // 重置状态
             this.reset();
@@ -53,8 +58,8 @@ class DependencyResolver {
             // 构建依赖图
             const graph = this.buildDependencyGraph(packages);
             
-            // 验证依赖关系
-            const validationResult = this.validateDependencies(packages, graph);
+            // 验证依赖关系（增强版）
+            const validationResult = this.validateDependenciesEnhanced(packages, graph);
             if (!validationResult.success) {
                 return validationResult;
             }
@@ -68,13 +73,23 @@ class DependencyResolver {
             return {
                 success: true,
                 buildOrder: this.buildOrder,
-                dependencyGraph: graph
+                dependencyGraph: graph,
+                validationWarnings: configValidation.warnings || []
             };
 
         } catch (error) {
+            const unexpectedError = this.errorHandler.createError(
+                'unexpected_error',
+                ErrorSeverity.CRITICAL,
+                `Unexpected error during dependency resolution: ${error.message}`,
+                { originalError: error.message, stack: error.stack }
+            );
+            
             return {
                 success: false,
-                error: `Unexpected error during dependency resolution: ${error.message}`
+                error: unexpectedError.message,
+                detailedErrors: [unexpectedError],
+                errorReport: this.errorHandler.generateDetailedReport([unexpectedError])
             };
         }
     }
@@ -162,6 +177,45 @@ class DependencyResolver {
     }
 
     /**
+     * 增强的依赖验证（使用新的错误处理器）
+     * @param {Object} packages - 包配置
+     * @param {Map} graph - 依赖图
+     * @returns {Object} 验证结果
+     */
+    validateDependenciesEnhanced(packages, graph) {
+        const missingDeps = [];
+        
+        for (const [packageName, config] of Object.entries(packages)) {
+            const dependencies = config.dependencies || [];
+            
+            for (const dep of dependencies) {
+                if (typeof dep === 'string' && dep.trim()) {
+                    if (!packages.hasOwnProperty(dep)) {
+                        missingDeps.push({
+                            package: packageName,
+                            missingDependency: dep
+                        });
+                    }
+                }
+            }
+        }
+
+        if (missingDeps.length > 0) {
+            const errorObj = this.errorHandler.createMissingDependenciesError(missingDeps);
+            
+            return {
+                success: false,
+                error: errorObj.message,
+                detailedErrors: [errorObj],
+                errorReport: this.errorHandler.generateDetailedReport([errorObj]),
+                missingDependencies: missingDeps
+            };
+        }
+
+        return { success: true };
+    }
+
+    /**
      * 拓扑排序实现
      * @param {Object} packages - 包配置
      * @param {Map} graph - 依赖图
@@ -203,9 +257,17 @@ class DependencyResolver {
             const cycleStart = path.indexOf(packageName);
             const cyclePath = path.slice(cycleStart).concat([packageName]);
             
+            // 使用增强的错误处理器创建循环依赖错误
+            const errorObj = this.errorHandler.createCircularDependencyError(cyclePath, {
+                detectionPath: path,
+                cycleDetectedAt: packageName
+            });
+            
             return {
                 success: false,
-                error: `Circular dependency detected: ${cyclePath.join(' → ')}`,
+                error: errorObj.message,
+                detailedErrors: [errorObj],
+                errorReport: this.errorHandler.generateDetailedReport([errorObj]),
                 cyclePath: cyclePath
             };
         }
@@ -276,8 +338,8 @@ class DependencyResolver {
 }
 
 // 便捷的导出函数
-function resolveBuildOrder(packagesConfig) {
-    const resolver = new DependencyResolver();
+function resolveBuildOrder(packagesConfig, options = {}) {
+    const resolver = new DependencyResolver(options);
     return resolver.resolveBuildOrder(packagesConfig);
 }
 
