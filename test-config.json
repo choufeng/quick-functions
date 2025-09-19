@@ -1,0 +1,42 @@
+{
+  "configs": [
+    {
+      "name": "legacy-test",
+      "description": "Legacy single package test config",
+      "package_dir": "$HOME/test/package",
+      "app_dir": "$HOME/test/app",
+      "package_name": "@test/legacy-package",
+      "start_command": "./pnpm start",
+      "build_command": "./pnpm run build"
+    },
+    {
+      "name": "chain-test",
+      "description": "Chain configuration test",
+      "type": "chain",
+      "chain": [
+        {
+          "type": "package",
+          "name": "package-a",
+          "package_dir": "$HOME/test/package-a",
+          "package_name": "@test/package-a",
+          "build_command": "./pnpm run build"
+        },
+        {
+          "type": "package", 
+          "name": "package-b",
+          "package_dir": "$HOME/test/package-b",
+          "package_name": "@test/package-b",
+          "build_command": "./pnpm run build",
+          "dependencies": ["package-a"]
+        },
+        {
+          "type": "app",
+          "name": "app-c",
+          "app_dir": "$HOME/test/app-c",
+          "start_command": "./pnpm start",
+          "dependencies": ["package-b"]
+        }
+      ]
+    }
+  ]
+}

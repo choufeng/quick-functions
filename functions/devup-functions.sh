@@ -554,7 +554,12 @@ _parse_chain_config() {
     return 0
 }
 
+# === STREAM C: API Integration ===
 # 加载配置 | Load configuration
+# API 签名：支持链式配置和向后兼容性 | API signature: supports chain configs and backward compatibility
+# 用法 | Usage:
+#   单包模式 | Single package mode: _devup_load_config "config_name" pkg_dir app_dir pkg_name [start_cmd] [build_cmd]
+#   链式模式 | Chain mode: _devup_load_config "config_name" pkg_dir app_dir pkg_name [start_cmd] [build_cmd] [chain_result_ref] [config_type_ref]
 _devup_load_config() {
     local requested_config_name="$1"
     local pkg_dir_ref_name="$2"
@@ -562,6 +567,8 @@ _devup_load_config() {
     local pkg_name_ref_name="$4"
     local start_cmd_ref_name="$5"
     local build_cmd_ref_name="$6"
+    local chain_result_ref_name="$7"  # 新增：链式配置完整结果 | New: complete chain config result
+    local config_type_ref_name="$8"   # 新增：配置类型返回 | New: config type return
     
     local config_file="$HOME/.quick-functions/devup-configs.json"
     
@@ -642,43 +649,105 @@ _devup_load_config() {
             return 1
         fi
         
-        # 注意：完整的链式配置API将由 Stream C 实现
-        # 这里提供基本的解析结果，但返回值结构将由 Stream C 重新设计
-        # Note: Complete chain config API will be implemented by Stream C
-        # This provides basic parsing result, but return value structure will be redesigned by Stream C
+        # === STREAM C: 链式配置完整API实现 | Chain Config Complete API Implementation ===
         echo "✅ 链式配置解析成功 | Chain config parsing successful"
-        echo "📊 解析结果 (临时格式，最终API由Stream C设计) | Parse result (temporary format, final API designed by Stream C):"
-        echo "$parsed_chain_result" | jq '.'
         
-        # 临时处理：对于链式配置，暂时返回第一个节点的信息以保持API兼容性
-        # 这将在 Stream C 中被完全重新设计
-        # Temporary handling: return first node info for chain config to maintain API compatibility
-        # This will be completely redesigned in Stream C
-        local first_node
-        first_node=$(echo "$parsed_chain_result" | jq '.nodes[0]')
-        local first_node_type
-        first_node_type=$(echo "$first_node" | jq -r '.type')
+        # 返回配置类型 | Return config type
+        if [ -n "$config_type_ref_name" ]; then
+            eval "$config_type_ref_name='chain'"
+            echo "🏷️  配置类型已设置: chain | Config type set: chain"
+        fi
         
-        if [ "$first_node_type" = "package" ]; then
+        # 返回完整的链式配置结果 | Return complete chain config result
+        if [ -n "$chain_result_ref_name" ]; then
+            eval "$chain_result_ref_name='$parsed_chain_result'"
+            local node_count
+            node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+            echo "📊 链式配置完整结果已返回，包含 $node_count 个节点 | Complete chain config result returned with $node_count nodes"
+        fi
+        
+        # 为向后兼容性，智能选择合适的节点返回基本信息 | For backward compatibility, intelligently select appropriate node for basic info
+        local selected_node selected_node_type
+        
+        # 优先选择第一个包节点，如果没有则选择第一个应用节点 | Prefer first package node, fallback to first app node
+        local node_count
+        node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+        
+        if [ "$node_count" -eq 0 ]; then
+            echo "❌ 错误：链式配置中没有节点 | Error: No nodes in chain config"
+            return 1
+        fi
+        
+        echo "🔍 在 $node_count 个节点中选择主要节点... | Selecting primary node from $node_count nodes..."
+        
+        for ((i=0; i<node_count; i++)); do
+            local node_data node_type node_name
+            node_data=$(echo "$parsed_chain_result" | jq ".nodes[$i]")
+            node_type=$(echo "$node_data" | jq -r '.type')
+            node_name=$(echo "$node_data" | jq -r '.name')
+            
+            if [ "$node_type" = "package" ]; then
+                selected_node="$node_data"
+                selected_node_type="package"
+                echo "📦 选择包节点 '$node_name' (位置 $((i+1))) 作为主要节点 | Selected package node '$node_name' (position $((i+1))) as primary node"
+                break
+            fi
+        done
+        
+        # 如果没有找到包节点，使用第一个应用节点 | If no package node found, use first app node
+        if [ -z "$selected_node" ]; then
+            selected_node=$(echo "$parsed_chain_result" | jq '.nodes[0]')
+            selected_node_type=$(echo "$selected_node" | jq -r '.type')
+            local first_node_name
+            first_node_name=$(echo "$selected_node" | jq -r '.name')
+            echo "🏗️  使用应用节点 '$first_node_name' 作为主要节点 | Using app node '$first_node_name' as primary node"
+        fi
+        
+        # 根据选中的节点类型设置返回值 | Set return values based on selected node type
+        if [ "$selected_node_type" = "package" ]; then
             local _package_dir _package_name _build_command
-            _package_dir=$(echo "$first_node" | jq -r '.package_dir')
-            _package_name=$(echo "$first_node" | jq -r '.package_name')
-            _build_command=$(echo "$first_node" | jq -r '.build_command')
+            _package_dir=$(echo "$selected_node" | jq -r '.package_dir')
+            _package_name=$(echo "$selected_node" | jq -r '.package_name')
+            _build_command=$(echo "$selected_node" | jq -r '.build_command')
+            
+            # 验证提取的数据 | Validate extracted data
+            if [ "$_package_dir" = "null" ] || [ -z "$_package_dir" ]; then
+                echo "❌ 错误：选择的包节点缺少 package_dir | Error: Selected package node missing package_dir"
+                return 1
+            fi
+            if [ "$_package_name" = "null" ] || [ -z "$_package_name" ]; then
+                echo "❌ 错误：选择的包节点缺少 package_name | Error: Selected package node missing package_name"
+                return 1
+            fi
             
             eval "$pkg_dir_ref_name='$_package_dir'"
             eval "$pkg_name_ref_name='$_package_name'"
             [ -n "$build_cmd_ref_name" ] && eval "$build_cmd_ref_name='$_build_command'"
             
-            echo "⚠️  链式配置临时模式：仅返回第一个包节点信息 | Chain config temporary mode: returning only first package node info"
-        elif [ "$first_node_type" = "app" ]; then
+            echo "✅ 向后兼容：返回包节点信息 | Backward compatibility: returning package node info"
+            echo "   📁 包目录: $_package_dir | Package directory: $_package_dir"
+            echo "   📦 包名称: $_package_name | Package name: $_package_name"
+            
+        elif [ "$selected_node_type" = "app" ]; then
             local _app_dir _start_command
-            _app_dir=$(echo "$first_node" | jq -r '.app_dir')
-            _start_command=$(echo "$first_node" | jq -r '.start_command')
+            _app_dir=$(echo "$selected_node" | jq -r '.app_dir')
+            _start_command=$(echo "$selected_node" | jq -r '.start_command')
+            
+            # 验证提取的数据 | Validate extracted data
+            if [ "$_app_dir" = "null" ] || [ -z "$_app_dir" ]; then
+                echo "❌ 错误：选择的应用节点缺少 app_dir | Error: Selected app node missing app_dir"
+                return 1
+            fi
             
             eval "$app_dir_ref_name='$_app_dir'"
             [ -n "$start_cmd_ref_name" ] && eval "$start_cmd_ref_name='$_start_command'"
             
-            echo "⚠️  链式配置临时模式：仅返回第一个应用节点信息 | Chain config temporary mode: returning only first app node info"
+            echo "✅ 向后兼容：返回应用节点信息 | Backward compatibility: returning app node info"
+            echo "   📁 应用目录: $_app_dir | App directory: $_app_dir"
+            
+        else
+            echo "❌ 错误：未知的节点类型 '$selected_node_type' | Error: Unknown node type '$selected_node_type'"
+            return 1
         fi
         
         return 0
@@ -686,6 +755,15 @@ _devup_load_config() {
     elif [ "$config_type" = "legacy" ]; then
         # 传统单包配置：继续现有逻辑 | Legacy single package config: continue with existing logic
         echo "📦 使用传统单包配置模式 | Using legacy single package config mode"
+        
+        # 返回配置类型 | Return config type
+        if [ -n "$config_type_ref_name" ]; then
+            eval "$config_type_ref_name='legacy'"
+            echo "🏷️  配置类型已设置: legacy | Config type set: legacy"
+        fi
+        
+        # 为链式配置API提供空值 | Provide empty values for chain config API
+        [ -n "$chain_result_ref_name" ] && eval "$chain_result_ref_name=''"
     else
         # 未知配置类型 | Unknown config type
         echo "❌ 未知的配置类型: '$config_type'，支持的类型: 'chain' 或留空(默认单包模式) | Unknown config type: '$config_type', supported types: 'chain' or empty (default single package mode)"
@@ -714,6 +792,9 @@ _devup_load_config() {
     eval "$pkg_name_ref_name='$_package_name'"
     [ -n "$start_cmd_ref_name" ] && eval "$start_cmd_ref_name='$_start_command'"
     [ -n "$build_cmd_ref_name" ] && eval "$build_cmd_ref_name='$_build_command'"
+    
+    # 为链式配置API提供空值 | Provide empty values for chain config API
+    [ -n "$chain_result_ref_name" ] && eval "$chain_result_ref_name=''"
     
     echo "📝 使用配置: $_config_name_actual | Using config: $_config_name_actual"
     return 0
