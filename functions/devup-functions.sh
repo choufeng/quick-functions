@@ -1236,6 +1236,71 @@ _devup_execute_chain_build() {
         return 1
     fi
 
+    # 查找并启动最后一个app节点 | Find and start the last app node
+    echo ""
+    echo "🔍 查找最后一个app节点以启动开发服务器... | Looking for the last app node to start dev server..."
+
+    local last_app_node=""
+    local last_app_index=-1
+
+    # 从后往前查找最后一个app节点 | Search backwards for the last app node
+    for ((i=node_count-1; i>=0; i--)); do
+        local node_data
+        node_data=$(echo "$parsed_chain_result" | jq ".nodes[$i]")
+
+        local node_type node_name
+        node_type=$(echo "$node_data" | jq -r '.type')
+        node_name=$(echo "$node_data" | jq -r '.name')
+
+        if [ "$node_type" = "app" ]; then
+            # 检查这个app节点是否构建成功
+            local node_successful=false
+            for successful_node in "${successful_nodes[@]}"; do
+                if [ "$successful_node" = "$node_name" ]; then
+                    node_successful=true
+                    break
+                fi
+            done
+
+            if [ "$node_successful" = true ]; then
+                last_app_node="$node_data"
+                last_app_index=$i
+                echo "🎯 找到最后一个成功的app节点: $node_name | Found last successful app node: $node_name"
+                break
+            fi
+        fi
+    done
+
+    if [ -n "$last_app_node" ] && [ "$last_app_index" -ge 0 ]; then
+        local app_dir start_command
+        app_dir=$(echo "$last_app_node" | jq -r '.app_dir')
+        start_command=$(echo "$last_app_node" | jq -r '.start_command // "./pnpm start"')
+
+        echo "🚀 启动最后一个app节点的开发服务器... | Starting dev server for the last app node..."
+        echo "📁 应用目录: $app_dir | App directory: $app_dir"
+        echo "▶️  启动命令: $start_command | Start command: $start_command"
+
+        # 记录当前目录
+        local current_dir=$(pwd)
+
+        # 进入应用目录
+        if cd "$app_dir" 2>/dev/null; then
+            echo "🎉 链式构建完成！正在启动开发服务器... | Chain build completed! Starting development server..."
+            echo "💡 提示: 使用 Ctrl+C 停止开发服务器 | Tip: Use Ctrl+C to stop the development server"
+            echo ""
+
+            # 执行启动命令 | Execute start command
+            eval "$start_command"
+
+            cd "$current_dir"
+        else
+            echo "❌ 无法进入应用目录: $app_dir | Cannot enter app directory: $app_dir"
+            echo "⚠️  链式构建完成，但无法启动开发服务器 | Chain build completed, but cannot start dev server"
+        fi
+    else
+        echo "⚠️  未找到可启动的app节点，链式构建完成 | No startable app node found, chain build completed"
+    fi
+
     return 0
 }
 
@@ -1290,6 +1355,27 @@ _devup_build_package_node() {
         return 1
     }
 
+    # 处理依赖包安装 | Handle dependency package installation
+    local dependencies
+    dependencies=$(echo "$node_data" | jq -r '.dependencies[]?' 2>/dev/null)
+    if [ -n "$dependencies" ]; then
+        echo "🔗 检测到依赖包，开始安装... | Dependencies detected, starting installation..."
+
+        # 遍历每个依赖 | Iterate through each dependency
+        echo "$dependencies" | while IFS= read -r dep_name; do
+            if [ -n "$dep_name" ]; then
+                echo "📦 处理依赖: $dep_name | Processing dependency: $dep_name"
+
+                # 查找最新的alpha版本包文件
+                # 这里我们需要从之前构建的包中找到对应的tgz文件
+                # 暂时跳过实际安装，仅输出日志
+                echo "   ⚠️  依赖安装功能待完善 | Dependency installation feature to be improved"
+            fi
+        done
+    else
+        echo "💡 此包没有依赖项 | This package has no dependencies"
+    fi
+
     echo "🚀 开始执行构建命令... | Starting build command execution..."
 
     # 执行构建命令
@@ -1298,11 +1384,101 @@ _devup_build_package_node() {
 
         # 检查是否需要进行 npm pack (如果是npm包)
         if [ -f "package.json" ]; then
-            echo "📦 检测到 package.json，执行 npm pack... | Detected package.json, executing npm pack..."
-            if npm pack; then
-                echo "✅ npm pack 执行成功 | npm pack executed successfully"
+            echo "📦 检测到 package.json，开始生成 alpha 版本包... | Detected package.json, starting alpha version pack generation..."
+
+            # 清理旧的临时包文件 | Clean up old temporary package files
+            echo "🧹 清理旧的 alpha 版本文件... | Cleaning up old alpha version files..."
+            local cleanup_count=0
+            if command -v find >/dev/null 2>&1; then
+                # 查找并计数超过1天的 alpha 版本文件
+                cleanup_count=$(find . -name "*-alpha.*.tgz" -type f -mtime +1 2>/dev/null | wc -l | tr -d ' ')
+                # 删除超过1天的 alpha 版本文件
+                find . -name "*-alpha.*.tgz" -type f -mtime +1 -delete 2>/dev/null || true
+                if [ "$cleanup_count" -gt 0 ]; then
+                    echo "✅ 清理了 $cleanup_count 个旧的 alpha 版本文件 | Cleaned up $cleanup_count old alpha version files"
+                else
+                    echo "💡 没有发现需要清理的旧文件 | No old files found to clean up"
+                fi
             else
-                echo "⚠️  npm pack 执行失败，但构建命令成功 | npm pack failed, but build command succeeded"
+                echo "⚠️  find 命令不可用，跳过清理步骤 | find command not available, skipping cleanup"
+            fi
+
+            # 备份和修改版本号以避免缓存问题 | Backup and modify version to avoid cache issues
+            echo "🔖 备份并修改 package.json 版本号... | Backing up and modifying package.json version..."
+            local timestamp=$(date +%Y%m%d%H%M%S)
+            local package_json="./package.json"
+
+            # 检查 jq 是否可用 | Check if jq is available
+            if ! command -v jq >/dev/null 2>&1; then
+                echo "❌ 需要安装 jq 来修改 package.json | jq is required to modify package.json"
+                echo "   安装命令 | Install command: brew install jq"
+                cd "$current_dir"
+                return 1
+            fi
+
+            # 备份原始 package.json | Backup original package.json
+            cp "$package_json" "$package_json.backup" || {
+                echo "❌ 无法备份 package.json | Failed to backup package.json"
+                cd "$current_dir"
+                return 1
+            }
+
+            # 读取当前版本号 | Read current version
+            local current_version
+            current_version=$(jq -r '.version' "$package_json")
+            if [ $? -ne 0 ] || [ "$current_version" = "null" ]; then
+                echo "❌ 无法读取当前版本号 | Failed to read current version"
+                rm -f "$package_json.backup"
+                cd "$current_dir"
+                return 1
+            fi
+
+            # 生成 alpha 版本号 | Generate alpha version
+            local alpha_version="${current_version}-alpha.${timestamp}"
+            echo "📝 版本号变更: $current_version → $alpha_version | Version change: $current_version → $alpha_version"
+
+            # 修改版本号 | Modify version
+            jq --arg version "$alpha_version" '.version = $version' "$package_json" > "$package_json.tmp" && mv "$package_json.tmp" "$package_json" || {
+                echo "❌ 无法修改版本号 | Failed to modify version"
+                mv "$package_json.backup" "$package_json" 2>/dev/null
+                cd "$current_dir"
+                return 1
+            }
+
+            echo "🔨 执行 pnpm pack 生成 alpha 版本包... | Running pnpm pack to generate alpha version package..."
+            local pack_success=false
+            if command -v pnpm >/dev/null 2>&1; then
+                if [ -f "./pnpm" ]; then
+                    ./pnpm pack && pack_success=true
+                else
+                    pnpm pack && pack_success=true
+                fi
+            else
+                # 使用 npm pack 作为后备
+                echo "⚠️  未找到 pnpm，使用 npm pack | pnpm not found, using npm pack"
+                npm pack && pack_success=true
+            fi
+
+            # 恢复原始 package.json | Restore original package.json
+            echo "🔄 恢复原始 package.json... | Restoring original package.json..."
+            mv "$package_json.backup" "$package_json" || {
+                echo "⚠️  警告: 无法恢复原始 package.json | Warning: Failed to restore original package.json"
+            }
+
+            # 检查 pack 是否成功 | Check if pack was successful
+            if [ "$pack_success" = true ]; then
+                echo "✅ alpha 版本包生成成功 | Alpha version package generated successfully"
+
+                # 查找生成的 alpha 版本包文件
+                local alpha_tgz_file
+                alpha_tgz_file=$(find . -name "*-alpha.${timestamp}.tgz" -type f 2>/dev/null | head -1)
+                if [ -n "$alpha_tgz_file" ] && [ -f "$alpha_tgz_file" ]; then
+                    echo "📦 生成的 alpha 包文件: $alpha_tgz_file | Generated alpha package file: $alpha_tgz_file"
+                fi
+            else
+                echo "❌ alpha 版本包生成失败 | Alpha version package generation failed"
+                cd "$current_dir"
+                return 1
             fi
         fi
 
@@ -1343,9 +1519,26 @@ _devup_build_app_node() {
         return 1
     }
 
+    # 处理链式依赖包安装 | Handle chain dependency package installation
+    local dependencies
+    dependencies=$(echo "$node_data" | jq -r '.dependencies[]?' 2>/dev/null)
+    if [ -n "$dependencies" ]; then
+        echo "🔗 检测到链式依赖包，开始安装alpha版本... | Chain dependencies detected, starting alpha version installation..."
+
+        # 遍历每个依赖 | Iterate through each dependency
+        echo "$dependencies" | while IFS= read -r dep_name; do
+            if [ -n "$dep_name" ]; then
+                echo "📦 处理链式依赖: $dep_name | Processing chain dependency: $dep_name"
+                echo "   ⚠️  链式依赖安装功能待完善 - 需要从之前构建的包中查找alpha版本 | Chain dependency installation to be improved - need to find alpha versions from previously built packages"
+            fi
+        done
+    else
+        echo "💡 此应用没有链式依赖项 | This app has no chain dependencies"
+    fi
+
     # 对于应用节点，我们通常只需要确保依赖安装完成
     if [ -f "package.json" ]; then
-        echo "📦 检测到 package.json，检查依赖... | Detected package.json, checking dependencies..."
+        echo "📦 检测到 package.json，检查常规依赖... | Detected package.json, checking regular dependencies..."
         if [ ! -d "node_modules" ]; then
             echo "🔧 安装依赖... | Installing dependencies..."
             if npm install; then
