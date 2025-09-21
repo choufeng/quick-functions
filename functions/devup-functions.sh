@@ -9,7 +9,10 @@ devup() {
     local show_help=false
     local show_list=false
     local show_config=""
-    
+    local show_chain=""
+    local validate_chain=""
+    local chain_file=""
+
     while [[ $# -gt 0 ]]; do
         case $1 in
             --list)
@@ -18,6 +21,18 @@ devup() {
                 ;;
             --show)
                 show_config="${2:-}"
+                shift 2
+                ;;
+            --show-chain)
+                show_chain="${2:-}"
+                shift 2
+                ;;
+            --validate-chain)
+                validate_chain="${2:-}"
+                shift 2
+                ;;
+            --chain)
+                chain_file="${2:-}"
                 shift 2
                 ;;
             --help|-h)
@@ -39,11 +54,14 @@ devup() {
     # 显示帮助信息 | Show help
     if [ "$show_help" = true ]; then
         echo "📖 devup 使用说明 | devup Usage:"
-        echo "  devup                  使用第一个配置 | Use first configuration"
-        echo "  devup -<config_name>   使用指定配置 | Use specific configuration"
-        echo "  devup --list           列出所有配置 | List all configurations"
-        echo "  devup --show [name]    显示配置详情 | Show configuration details"
-        echo "  devup --help           显示此帮助 | Show this help"
+        echo "  devup                     使用第一个配置 | Use first configuration"
+        echo "  devup -<config_name>      使用指定配置 | Use specific configuration"
+        echo "  devup --chain <file>      使用独立链式配置文件 | Use standalone chain config file"
+        echo "  devup --list              列出所有配置 | List all configurations"
+        echo "  devup --show [name]       显示配置详情 | Show configuration details"
+        echo "  devup --show-chain <file> 显示链式配置详情 | Show chain configuration details"
+        echo "  devup --validate-chain <file> 验证链式配置文件 | Validate chain configuration file"
+        echo "  devup --help              显示此帮助 | Show this help"
         return 0
     fi
     
@@ -58,7 +76,25 @@ devup() {
         _devup_show_config "$show_config"
         return $?
     fi
-    
+
+    # 显示链式配置详情 | Show chain configuration details
+    if [ -n "$show_chain" ]; then
+        _devup_show_chain_config "$show_chain"
+        return $?
+    fi
+
+    # 验证链式配置文件 | Validate chain configuration file
+    if [ -n "$validate_chain" ]; then
+        _devup_validate_chain_config "$validate_chain"
+        return $?
+    fi
+
+    # 使用独立链式配置文件 | Use standalone chain config file
+    if [ -n "$chain_file" ]; then
+        _devup_run_with_chain_file "$chain_file"
+        return $?
+    fi
+
     echo "🔄 开始更新本地包... | Starting to update local package..."
     
     # ==============================================
@@ -926,6 +962,199 @@ _devup_show_config() {
         _devup_list_configs
         return 1
     fi
+}
+
+# 显示链式配置详情 | Show chain configuration details
+_devup_show_chain_config() {
+    local chain_file="$1"
+
+    if [ -z "$chain_file" ]; then
+        echo "❌ 请提供链式配置文件路径 | Please provide chain config file path"
+        return 1
+    fi
+
+    if [ ! -f "$chain_file" ]; then
+        echo "❌ 链式配置文件不存在: $chain_file | Chain config file not found: $chain_file"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "❌ 需要安装 jq 来解析配置文件 | jq is required to parse config file"
+        echo "   安装命令 | Install command: brew install jq"
+        return 1
+    fi
+
+    echo "📋 链式配置详情 | Chain Configuration Details: $chain_file"
+    echo ""
+
+    local config_data
+    config_data=$(cat "$chain_file" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ 无法读取配置文件 | Unable to read config file"
+        return 1
+    fi
+
+    # 验证并解析链式配置
+    if ! _validate_chain_config "$config_data"; then
+        return 1
+    fi
+
+    local parsed_chain_result
+    if ! _parse_chain_config "$config_data" "parsed_chain_result"; then
+        echo "❌ 链式配置解析失败 | Chain config parsing failed"
+        return 1
+    fi
+
+    # 显示链式配置的详细信息
+    local node_count
+    node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+    echo "🔗 链式配置包含 $node_count 个节点 | Chain config contains $node_count nodes"
+    echo ""
+
+    for ((i=0; i<node_count; i++)); do
+        local node_data node_type node_name
+        node_data=$(echo "$parsed_chain_result" | jq ".nodes[$i]")
+        node_type=$(echo "$node_data" | jq -r '.type')
+        node_name=$(echo "$node_data" | jq -r '.name')
+
+        echo "  🔸 节点 $((i+1)): $node_name (类型: $node_type) | Node $((i+1)): $node_name (type: $node_type)"
+
+        if [ "$node_type" = "package" ]; then
+            local package_dir package_name build_command
+            package_dir=$(echo "$node_data" | jq -r '.package_dir')
+            package_name=$(echo "$node_data" | jq -r '.package_name')
+            build_command=$(echo "$node_data" | jq -r '.build_command')
+
+            echo "    📦 包目录: $package_dir | Package directory: $package_dir"
+            echo "    📦 包名称: $package_name | Package name: $package_name"
+            echo "    🏗️  构建命令: $build_command | Build command: $build_command"
+        elif [ "$node_type" = "app" ]; then
+            local app_dir start_command
+            app_dir=$(echo "$node_data" | jq -r '.app_dir')
+            start_command=$(echo "$node_data" | jq -r '.start_command')
+
+            echo "    🏗️  应用目录: $app_dir | App directory: $app_dir"
+            echo "    🚀 启动命令: $start_command | Start command: $start_command"
+        fi
+
+        # 显示依赖关系
+        local dependencies
+        dependencies=$(echo "$node_data" | jq -r '.dependencies[]?' 2>/dev/null)
+        if [ -n "$dependencies" ]; then
+            echo "    🔗 依赖: $(echo "$dependencies" | tr '\n' ', ' | sed 's/,$//' | sed 's/,/, /g') | Dependencies: $(echo "$dependencies" | tr '\n' ', ' | sed 's/,$//' | sed 's/,/, /g')"
+        fi
+        echo ""
+    done
+}
+
+# 验证链式配置文件 | Validate chain configuration file
+_devup_validate_chain_config() {
+    local chain_file="$1"
+
+    if [ -z "$chain_file" ]; then
+        echo "❌ 请提供链式配置文件路径 | Please provide chain config file path"
+        return 1
+    fi
+
+    if [ ! -f "$chain_file" ]; then
+        echo "❌ 链式配置文件不存在: $chain_file | Chain config file not found: $chain_file"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "❌ 需要安装 jq 来解析配置文件 | jq is required to parse config file"
+        echo "   安装命令 | Install command: brew install jq"
+        return 1
+    fi
+
+    echo "🔍 验证链式配置文件: $chain_file | Validating chain config file: $chain_file"
+    echo ""
+
+    local config_data
+    config_data=$(cat "$chain_file" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ 无法读取配置文件 | Unable to read config file"
+        return 1
+    fi
+
+    # 验证 JSON 格式
+    if ! echo "$config_data" | jq . >/dev/null 2>&1; then
+        echo "❌ 配置文件不是有效的 JSON 格式 | Config file is not valid JSON"
+        return 1
+    fi
+
+    # 验证链式配置格式
+    if ! _validate_chain_config "$config_data"; then
+        return 1
+    fi
+
+    # 尝试解析配置
+    local parsed_chain_result
+    if ! _parse_chain_config "$config_data" "parsed_chain_result"; then
+        echo "❌ 链式配置解析失败 | Chain config parsing failed"
+        return 1
+    fi
+
+    local node_count
+    node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+
+    echo "✅ 配置文件验证成功！| Config file validation successful!"
+    echo "📊 包含 $node_count 个有效节点 | Contains $node_count valid nodes"
+
+    return 0
+}
+
+# 使用独立链式配置文件运行 | Run with standalone chain config file
+_devup_run_with_chain_file() {
+    local chain_file="$1"
+
+    if [ -z "$chain_file" ]; then
+        echo "❌ 请提供链式配置文件路径 | Please provide chain config file path"
+        return 1
+    fi
+
+    if [ ! -f "$chain_file" ]; then
+        echo "❌ 链式配置文件不存在: $chain_file | Chain config file not found: $chain_file"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "❌ 需要安装 jq 来解析配置文件 | jq is required to parse config file"
+        echo "   安装命令 | Install command: brew install jq"
+        return 1
+    fi
+
+    echo "🔗 使用独立链式配置文件: $chain_file | Using standalone chain config file: $chain_file"
+    echo ""
+
+    local config_data
+    config_data=$(cat "$chain_file" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ 无法读取配置文件 | Unable to read config file"
+        return 1
+    fi
+
+    # 验证并解析链式配置
+    if ! _validate_chain_config "$config_data"; then
+        return 1
+    fi
+
+    local parsed_chain_result
+    if ! _parse_chain_config "$config_data" "parsed_chain_result"; then
+        echo "❌ 链式配置解析失败 | Chain config parsing failed"
+        return 1
+    fi
+
+    echo "🚀 开始执行链式构建... | Starting chain build execution..."
+    echo ""
+
+    # TODO: 在这里实现链式配置的实际执行逻辑
+    # 这里应该调用链式构建协调器来执行实际的构建流程
+    echo "⚠️  链式构建执行逻辑尚未实现 | Chain build execution logic not yet implemented"
+    echo "💡 请查看解析结果: | Please check parsed result:"
+    echo "$parsed_chain_result" | jq '.'
+
+    return 0
 }
 
 # 使用说明 | Usage Instructions:
