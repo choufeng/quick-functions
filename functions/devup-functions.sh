@@ -584,7 +584,8 @@ _parse_chain_config() {
         }')
     
     # 通过引用返回结果 | Return result via reference
-    eval "$result_ref_name='$final_result'"
+    # 使用 printf 来避免特殊字符问题
+    printf -v "$result_ref_name" '%s' "$final_result"
     
     echo "✅ 链式配置解析完成，共 $chain_length 个节点 | Chain config parsing completed with $chain_length nodes"
     return 0
@@ -1148,12 +1149,231 @@ _devup_run_with_chain_file() {
     echo "🚀 开始执行链式构建... | Starting chain build execution..."
     echo ""
 
-    # TODO: 在这里实现链式配置的实际执行逻辑
-    # 这里应该调用链式构建协调器来执行实际的构建流程
-    echo "⚠️  链式构建执行逻辑尚未实现 | Chain build execution logic not yet implemented"
-    echo "💡 请查看解析结果: | Please check parsed result:"
-    echo "$parsed_chain_result" | jq '.'
+    # 执行链式构建
+    if ! _devup_execute_chain_build "$parsed_chain_result"; then
+        echo "❌ 链式构建执行失败 | Chain build execution failed"
+        return 1
+    fi
 
+    echo "🎉 链式构建执行完成！ | Chain build execution completed!"
+    return 0
+}
+
+# === 链式构建协调器 | Chain Build Coordinator ===
+
+# 执行链式构建的核心函数
+# Executes chain build coordination
+_devup_execute_chain_build() {
+    local parsed_chain_result="$1"
+
+    if [ -z "$parsed_chain_result" ]; then
+        echo "❌ 错误：未提供解析后的链式配置 | Error: No parsed chain config provided"
+        return 1
+    fi
+
+    # 获取节点数量
+    local node_count
+    node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+
+    echo "🔗 开始执行链式构建，包含 $node_count 个节点 | Starting chain build execution with $node_count nodes"
+    echo ""
+
+    # 记录构建开始时间
+    local start_time=$(date +%s)
+    local failed_nodes=()
+    local successful_nodes=()
+
+    # 按顺序执行每个节点
+    for ((i=0; i<node_count; i++)); do
+        local node_data
+        node_data=$(echo "$parsed_chain_result" | jq ".nodes[$i]")
+
+        local node_type node_name
+        node_type=$(echo "$node_data" | jq -r '.type')
+        node_name=$(echo "$node_data" | jq -r '.name')
+
+        echo "🏗️  [$((i+1))/$node_count] 开始构建节点: $node_name (类型: $node_type) | Starting to build node: $node_name (type: $node_type)"
+
+        # 执行单个节点的构建
+        if _devup_execute_single_node "$node_data" "$i"; then
+            successful_nodes+=("$node_name")
+            echo "✅ 节点 '$node_name' 构建成功 | Node '$node_name' build successful"
+        else
+            failed_nodes+=("$node_name")
+            echo "❌ 节点 '$node_name' 构建失败 | Node '$node_name' build failed"
+
+            # 根据配置决定是否继续
+            echo "⚠️  构建失败，停止后续节点的执行 | Build failed, stopping subsequent node execution"
+            break
+        fi
+
+        echo ""
+    done
+
+    # 计算构建时间
+    local end_time=$(date +%s)
+    local build_duration=$((end_time - start_time))
+
+    # 输出构建总结
+    echo "📊 链式构建总结 | Chain Build Summary"
+    echo "════════════════════════════════════════"
+    echo "⏱️  构建时长: ${build_duration}秒 | Build duration: ${build_duration}s"
+    echo "✅ 成功节点: ${#successful_nodes[@]} | Successful nodes: ${#successful_nodes[@]}"
+    echo "❌ 失败节点: ${#failed_nodes[@]} | Failed nodes: ${#failed_nodes[@]}"
+
+    if [ ${#successful_nodes[@]} -gt 0 ]; then
+        echo "🎯 成功构建的节点: | Successfully built nodes:"
+        for node in "${successful_nodes[@]}"; do
+            echo "   ✓ $node"
+        done
+    fi
+
+    if [ ${#failed_nodes[@]} -gt 0 ]; then
+        echo "💥 失败的节点: | Failed nodes:"
+        for node in "${failed_nodes[@]}"; do
+            echo "   ✗ $node"
+        done
+        return 1
+    fi
+
+    return 0
+}
+
+# 执行单个节点的构建
+# Execute build for a single node
+_devup_execute_single_node() {
+    local node_data="$1"
+    local node_index="$2"
+
+    local node_type node_name
+    node_type=$(echo "$node_data" | jq -r '.type')
+    node_name=$(echo "$node_data" | jq -r '.name')
+
+    echo "🔧 准备构建环境... | Preparing build environment..."
+
+    if [ "$node_type" = "package" ]; then
+        _devup_build_package_node "$node_data"
+    elif [ "$node_type" = "app" ]; then
+        _devup_build_app_node "$node_data"
+    else
+        echo "❌ 未知节点类型: $node_type | Unknown node type: $node_type"
+        return 1
+    fi
+}
+
+# 构建包节点
+# Build package node
+_devup_build_package_node() {
+    local node_data="$1"
+
+    local package_dir package_name build_command
+    package_dir=$(echo "$node_data" | jq -r '.package_dir')
+    package_name=$(echo "$node_data" | jq -r '.package_name')
+    build_command=$(echo "$node_data" | jq -r '.build_command // "npm run build"')
+
+    echo "📦 构建包: $package_name | Building package: $package_name"
+    echo "📁 包目录: $package_dir | Package directory: $package_dir"
+    echo "🔨 构建命令: $build_command | Build command: $build_command"
+
+    # 检查包目录是否存在
+    if [ ! -d "$package_dir" ]; then
+        echo "❌ 包目录不存在: $package_dir | Package directory not found: $package_dir"
+        return 1
+    fi
+
+    # 记录当前目录
+    local current_dir=$(pwd)
+
+    # 进入包目录
+    cd "$package_dir" || {
+        echo "❌ 无法进入包目录: $package_dir | Cannot enter package directory: $package_dir"
+        return 1
+    }
+
+    echo "🚀 开始执行构建命令... | Starting build command execution..."
+
+    # 执行构建命令
+    if eval "$build_command"; then
+        echo "✅ 包构建命令执行成功 | Package build command executed successfully"
+
+        # 检查是否需要进行 npm pack (如果是npm包)
+        if [ -f "package.json" ]; then
+            echo "📦 检测到 package.json，执行 npm pack... | Detected package.json, executing npm pack..."
+            if npm pack; then
+                echo "✅ npm pack 执行成功 | npm pack executed successfully"
+            else
+                echo "⚠️  npm pack 执行失败，但构建命令成功 | npm pack failed, but build command succeeded"
+            fi
+        fi
+
+        cd "$current_dir"
+        return 0
+    else
+        echo "❌ 包构建命令执行失败 | Package build command execution failed"
+        cd "$current_dir"
+        return 1
+    fi
+}
+
+# 构建应用节点
+# Build app node
+_devup_build_app_node() {
+    local node_data="$1"
+
+    local app_dir start_command
+    app_dir=$(echo "$node_data" | jq -r '.app_dir')
+    start_command=$(echo "$node_data" | jq -r '.start_command // "npm start"')
+
+    echo "🚀 构建应用 | Building application"
+    echo "📁 应用目录: $app_dir | Application directory: $app_dir"
+    echo "▶️  启动命令: $start_command | Start command: $start_command"
+
+    # 检查应用目录是否存在
+    if [ ! -d "$app_dir" ]; then
+        echo "❌ 应用目录不存在: $app_dir | Application directory not found: $app_dir"
+        return 1
+    fi
+
+    # 记录当前目录
+    local current_dir=$(pwd)
+
+    # 进入应用目录
+    cd "$app_dir" || {
+        echo "❌ 无法进入应用目录: $app_dir | Cannot enter application directory: $app_dir"
+        return 1
+    }
+
+    # 对于应用节点，我们通常只需要确保依赖安装完成
+    if [ -f "package.json" ]; then
+        echo "📦 检测到 package.json，检查依赖... | Detected package.json, checking dependencies..."
+        if [ ! -d "node_modules" ]; then
+            echo "🔧 安装依赖... | Installing dependencies..."
+            if npm install; then
+                echo "✅ 依赖安装成功 | Dependencies installed successfully"
+            else
+                echo "❌ 依赖安装失败 | Dependencies installation failed"
+                cd "$current_dir"
+                return 1
+            fi
+        else
+            echo "✅ 依赖已存在 | Dependencies already exist"
+        fi
+
+        # 如果有构建脚本，执行构建
+        if npm run --silent 2>/dev/null | grep -q "build"; then
+            echo "🔨 执行应用构建... | Executing application build..."
+            if npm run build; then
+                echo "✅ 应用构建成功 | Application build successful"
+            else
+                echo "❌ 应用构建失败 | Application build failed"
+                cd "$current_dir"
+                return 1
+            fi
+        fi
+    fi
+
+    echo "✅ 应用节点处理完成 | Application node processing completed"
+    cd "$current_dir"
     return 0
 }
 
