@@ -536,37 +536,52 @@ _parse_chain_config() {
         local node_json="${parsed_nodes[i]}"
         local dependencies
         dependencies=$(echo "$node_json" | jq -r '.dependencies[]?' 2>/dev/null)
-        
+
         if [ -n "$dependencies" ]; then
             echo "$dependencies" | while IFS= read -r dep_name; do
-                # 检查依赖是否在已知节点列表中 | Check if dependency exists in known nodes
+                # 检查依赖是否在已知节点列表中 (支持通过节点名或包名查找) | Check if dependency exists in known nodes (support lookup by node name or package name)
                 local found=false
-                for known_name in "${node_names[@]}"; do
-                    if [ "$known_name" = "$dep_name" ]; then
-                        found=true
-                        break
-                    fi
-                done
-                
-                if [ "$found" = false ]; then
-                    echo "❌ 节点 '$node_name' 引用了未知的依赖: '$dep_name' | Node '$node_name' references unknown dependency: '$dep_name'"
-                    return 1
-                fi
-                
-                # 检查是否存在循环依赖 (简单检查：依赖不能指向后面的节点) | Check for circular dependencies (simple check: dependency cannot point to later nodes)
                 local dep_index=-1
+
+                # 先检查节点名称匹配 | First check node name match
                 for ((j=0; j<${#node_names[@]}; j++)); do
                     if [ "${node_names[j]}" = "$dep_name" ]; then
+                        found=true
                         dep_index=$j
                         break
                     fi
                 done
-                
-                if [ "$dep_index" -ge "$i" ]; then
-                    echo "❌ 检测到无效的依赖顺序: 节点 '$node_name' (位置$i) 不能依赖位置 $dep_index 的节点 '$dep_name' | Invalid dependency order detected: node '$node_name' (position $i) cannot depend on node '$dep_name' at position $dep_index"
+
+                # 如果节点名称没有匹配，检查package_name匹配 | If node name doesn't match, check package_name match
+                if [ "$found" = false ]; then
+                    for ((j=0; j<chain_length; j++)); do
+                        local check_node_json="${parsed_nodes[j]}"
+                        local check_node_type
+                        check_node_type=$(echo "$check_node_json" | jq -r '.type')
+
+                        if [ "$check_node_type" = "package" ]; then
+                            local check_package_name
+                            check_package_name=$(echo "$check_node_json" | jq -r '.package_name')
+                            if [ "$check_package_name" = "$dep_name" ]; then
+                                found=true
+                                dep_index=$j
+                                break
+                            fi
+                        fi
+                    done
+                fi
+
+                if [ "$found" = false ]; then
+                    echo "❌ 节点 '$node_name' 引用了未知的依赖: '$dep_name' | Node '$node_name' references unknown dependency: '$dep_name'"
                     return 1
                 fi
-                
+
+                # 检查是否存在循环依赖 (简单检查：依赖不能指向后面的节点) | Check for circular dependencies (simple check: dependency cannot point to later nodes)
+                if [ "$dep_index" -ge "$i" ]; then
+                    echo "❌ 检测到无效的依赖顺序: 节点 '$node_name' (位置$i) 不能依赖位置 $dep_index 的依赖 '$dep_name' | Invalid dependency order detected: node '$node_name' (position $i) cannot depend on dependency '$dep_name' at position $dep_index"
+                    return 1
+                fi
+
                 echo "    ✅ 依赖关系验证通过: $node_name -> $dep_name | Dependency validation passed: $node_name -> $dep_name"
             done
         fi
@@ -1161,6 +1176,173 @@ _devup_run_with_chain_file() {
 
 # === 链式构建协调器 | Chain Build Coordinator ===
 
+# 全局变量：构建上下文追踪 | Global variables: Build context tracking
+# 使用普通数组和字符串处理来兼容旧版本bash | Use regular arrays and string processing for older bash compatibility
+
+# 清理构建上下文 | Clear build context
+_devup_clear_build_context() {
+    # 清理之前的构建上下文文件 | Clear previous build context files
+    rm -f /tmp/chain_build_context_packages.txt /tmp/chain_build_context_alpha_files.txt /tmp/chain_build_alpha_installations.txt 2>/dev/null
+    touch /tmp/chain_build_context_packages.txt
+    touch /tmp/chain_build_context_alpha_files.txt
+    touch /tmp/chain_build_alpha_installations.txt
+    echo "🧹 构建上下文已清理 | Build context cleared"
+}
+
+# 记录包到构建上下文 | Record package to build context
+_devup_record_package_context() {
+    local package_name="$1"
+    local package_dir="$2"
+    local alpha_file="$3"
+
+    echo "$package_name|$package_dir" >> /tmp/chain_build_context_packages.txt
+    echo "$package_name|$alpha_file" >> /tmp/chain_build_context_alpha_files.txt
+}
+
+# 从构建上下文查找包 | Find package from build context
+_devup_find_package_in_context() {
+    local package_name="$1"
+    local context_type="$2"  # "package_dir" or "alpha_file"
+
+    local context_file
+    if [ "$context_type" = "package_dir" ]; then
+        context_file="/tmp/chain_build_context_packages.txt"
+    elif [ "$context_type" = "alpha_file" ]; then
+        context_file="/tmp/chain_build_context_alpha_files.txt"
+    else
+        return 1
+    fi
+
+    if [ -f "$context_file" ]; then
+        grep "^${package_name}|" "$context_file" | cut -d'|' -f2 | head -1
+    fi
+}
+
+# 记录alpha版本安装信息 | Record alpha version installation info
+_devup_record_alpha_installation() {
+    local consumer_name="$1"      # 安装依赖的包/app名称
+    local consumer_type="$2"      # "package" or "app"
+    local dependency_name="$3"    # 被安装的依赖名称
+    local alpha_file="$4"         # alpha版本文件路径
+    local success="$5"            # "success" or "failed"
+
+    local timestamp=$(date +"%H:%M:%S")
+    echo "$timestamp|$consumer_type|$consumer_name|$dependency_name|$alpha_file|$success" >> /tmp/chain_build_alpha_installations.txt
+}
+
+# 获取alpha版本安装总结 | Get alpha version installation summary
+_devup_get_alpha_installation_summary() {
+    if [ ! -f "/tmp/chain_build_alpha_installations.txt" ]; then
+        return 0
+    fi
+
+    local total_installations=0
+    local successful_installations=0
+    local failed_installations=0
+
+    while IFS='|' read -r timestamp consumer_type consumer_name dependency_name alpha_file result; do
+        ((total_installations++))
+        if [ "$result" = "success" ]; then
+            ((successful_installations++))
+        else
+            ((failed_installations++))
+        fi
+    done < /tmp/chain_build_alpha_installations.txt
+
+    echo "📊 Alpha版本安装统计 | Alpha Version Installation Statistics"
+    echo "════════════════════════════════════════════════════════════════"
+    echo "📦 总安装次数: $total_installations | Total installations: $total_installations"
+    echo "✅ 成功安装: $successful_installations | Successful: $successful_installations"
+    echo "❌ 失败安装: $failed_installations | Failed: $failed_installations"
+    echo ""
+
+    if [ "$total_installations" -gt 0 ]; then
+        echo "📋 详细安装记录 | Detailed Installation Records:"
+        echo "────────────────────────────────────────────────────────────────"
+
+        while IFS='|' read -r timestamp consumer_type consumer_name dependency_name alpha_file result; do
+            local status_icon="✅"
+            if [ "$result" != "success" ]; then
+                status_icon="❌"
+            fi
+
+            local alpha_version=""
+            if [[ "$alpha_file" =~ -alpha\.([0-9]+)\.tgz ]]; then
+                alpha_version="alpha.${BASH_REMATCH[1]}"
+            elif [[ "$alpha_file" =~ -alpha\.([0-9]+) ]]; then
+                alpha_version="alpha.${BASH_REMATCH[1]}"
+            else
+                alpha_version="alpha.unknown"
+            fi
+
+            echo "  $status_icon [$timestamp] $consumer_type '$consumer_name' 安装 '$dependency_name' ($alpha_version)"
+            echo "      文件: $(basename "$alpha_file")"
+            echo ""
+        done < /tmp/chain_build_alpha_installations.txt
+    fi
+}
+
+# 查找依赖的alpha版本文件 | Find alpha version file for dependency
+_devup_find_dependency_alpha_file() {
+    local dependency_name="$1"
+    local parsed_chain_result="$2"
+
+    # 首先在构建上下文中查找 | First look in build context
+    local alpha_file
+    alpha_file=$(_devup_find_package_in_context "$dependency_name" "alpha_file")
+    if [ -n "$alpha_file" ] && [ -f "$alpha_file" ]; then
+        echo "$alpha_file"
+        return 0
+    elif [ -n "$alpha_file" ]; then
+        echo "⚠️  构建上下文中的alpha文件不存在: $alpha_file | Alpha file in build context not found: $alpha_file" >&2
+    fi
+
+    # 在链式配置中查找对应的package节点 | Find corresponding package node in chain config
+    local node_count
+    node_count=$(echo "$parsed_chain_result" | jq '.node_count')
+
+    for ((i=0; i<node_count; i++)); do
+        local node_data
+        node_data=$(echo "$parsed_chain_result" | jq ".nodes[$i]")
+
+        local node_type node_name package_name package_dir
+        node_type=$(echo "$node_data" | jq -r '.type')
+        node_name=$(echo "$node_data" | jq -r '.name')
+
+        if [ "$node_type" = "package" ]; then
+            package_name=$(echo "$node_data" | jq -r '.package_name')
+            package_dir=$(echo "$node_data" | jq -r '.package_dir')
+
+            # 检查package_name是否匹配依赖名称 | Check if package_name matches dependency name
+            if [ "$package_name" = "$dependency_name" ] || [ "$node_name" = "$dependency_name" ]; then
+                echo "🔍 找到依赖包配置: $dependency_name -> $package_dir | Found dependency package config: $dependency_name -> $package_dir" >&2
+
+                # 在package目录中查找最新的alpha版本文件 | Find latest alpha version file in package directory
+                local alpha_file
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    # macOS
+                    alpha_file=$(find "$package_dir" -name "*-alpha.*.tgz" -type f -exec ls -t {} + 2>/dev/null | head -1)
+                else
+                    # Linux
+                    alpha_file=$(find "$package_dir" -name "*-alpha.*.tgz" -type f -exec ls -lt {} + 2>/dev/null | head -1 | awk '{print $NF}')
+                fi
+
+                if [ -n "$alpha_file" ] && [ -f "$alpha_file" ]; then
+                    echo "📦 找到alpha版本文件: $alpha_file | Found alpha version file: $alpha_file" >&2
+                    echo "$alpha_file"
+                    return 0
+                else
+                    echo "❌ 未找到alpha版本文件在目录: $package_dir | No alpha version file found in directory: $package_dir" >&2
+                fi
+                break
+            fi
+        fi
+    done
+
+    echo "❌ 未找到依赖 '$dependency_name' 的alpha版本文件 | Alpha version file not found for dependency '$dependency_name'" >&2
+    return 1
+}
+
 # 执行链式构建的核心函数
 # Executes chain build coordination
 _devup_execute_chain_build() {
@@ -1170,6 +1352,9 @@ _devup_execute_chain_build() {
         echo "❌ 错误：未提供解析后的链式配置 | Error: No parsed chain config provided"
         return 1
     fi
+
+    # 清理并初始化构建上下文 | Clear and initialize build context
+    _devup_clear_build_context
 
     # 获取节点数量
     local node_count
@@ -1194,8 +1379,8 @@ _devup_execute_chain_build() {
 
         echo "🏗️  [$((i+1))/$node_count] 开始构建节点: $node_name (类型: $node_type) | Starting to build node: $node_name (type: $node_type)"
 
-        # 执行单个节点的构建
-        if _devup_execute_single_node "$node_data" "$i"; then
+        # 执行单个节点的构建，传递完整的链式配置用于依赖解析
+        if _devup_execute_single_node "$node_data" "$i" "$parsed_chain_result"; then
             successful_nodes+=("$node_name")
             echo "✅ 节点 '$node_name' 构建成功 | Node '$node_name' build successful"
         else
@@ -1233,6 +1418,15 @@ _devup_execute_chain_build() {
         for node in "${failed_nodes[@]}"; do
             echo "   ✗ $node"
         done
+    fi
+
+    echo ""
+    # 显示alpha版本安装统计 | Show alpha version installation statistics
+    echo "🔧 [调试] 开始显示alpha版本安装统计... | [Debug] Starting to show alpha version installation statistics..."
+    _devup_get_alpha_installation_summary
+    echo "🔧 [调试] alpha版本安装统计显示完成 | [Debug] Alpha version installation statistics display completed"
+
+    if [ ${#failed_nodes[@]} -gt 0 ]; then
         return 1
     fi
 
@@ -1309,6 +1503,7 @@ _devup_execute_chain_build() {
 _devup_execute_single_node() {
     local node_data="$1"
     local node_index="$2"
+    local parsed_chain_result="$3"  # 新增：完整的链式配置用于依赖解析 | New: complete chain config for dependency resolution
 
     local node_type node_name
     node_type=$(echo "$node_data" | jq -r '.type')
@@ -1317,9 +1512,9 @@ _devup_execute_single_node() {
     echo "🔧 准备构建环境... | Preparing build environment..."
 
     if [ "$node_type" = "package" ]; then
-        _devup_build_package_node "$node_data"
+        _devup_build_package_node "$node_data" "$parsed_chain_result"
     elif [ "$node_type" = "app" ]; then
-        _devup_build_app_node "$node_data"
+        _devup_build_app_node "$node_data" "$parsed_chain_result"
     else
         echo "❌ 未知节点类型: $node_type | Unknown node type: $node_type"
         return 1
@@ -1330,6 +1525,7 @@ _devup_execute_single_node() {
 # Build package node
 _devup_build_package_node() {
     local node_data="$1"
+    local parsed_chain_result="$2"
 
     local package_dir package_name build_command
     package_dir=$(echo "$node_data" | jq -r '.package_dir')
@@ -1355,25 +1551,85 @@ _devup_build_package_node() {
         return 1
     }
 
-    # 处理依赖包安装 | Handle dependency package installation
+    # 处理链式依赖包安装 | Handle chain dependency package installation
     local dependencies
     dependencies=$(echo "$node_data" | jq -r '.dependencies[]?' 2>/dev/null)
     if [ -n "$dependencies" ]; then
-        echo "🔗 检测到依赖包，开始安装... | Dependencies detected, starting installation..."
+        echo "🔗 检测到链式依赖包，开始安装alpha版本... | Chain dependencies detected, starting alpha version installation..."
+
+        # 安装失败计数器
+        local install_failures=0
+
+        # 获取节点名称用于记录 | Get node name for recording
+        local node_name
+        node_name=$(echo "$node_data" | jq -r '.name')
 
         # 遍历每个依赖 | Iterate through each dependency
-        echo "$dependencies" | while IFS= read -r dep_name; do
+        while IFS= read -r dep_name; do
             if [ -n "$dep_name" ]; then
-                echo "📦 处理依赖: $dep_name | Processing dependency: $dep_name"
+                echo "📦 处理链式依赖: $dep_name | Processing chain dependency: $dep_name"
 
-                # 查找最新的alpha版本包文件
-                # 这里我们需要从之前构建的包中找到对应的tgz文件
-                # 暂时跳过实际安装，仅输出日志
-                echo "   ⚠️  依赖安装功能待完善 | Dependency installation feature to be improved"
+                # 查找依赖的alpha版本文件 | Find dependency alpha version file
+                local alpha_file
+                alpha_file=$(_devup_find_dependency_alpha_file "$dep_name" "$parsed_chain_result" 2>/dev/null)
+
+                if [ $? -eq 0 ] && [ -n "$alpha_file" ] && [ -f "$alpha_file" ]; then
+                    echo "   ✅ 找到alpha版本文件: $alpha_file | Found alpha version file: $alpha_file"
+
+                    # 使用pnpm安装alpha版本包 | Install alpha version package using pnpm
+                    echo "   🚀 安装alpha版本: $dep_name@file:$alpha_file | Installing alpha version: $dep_name@file:$alpha_file"
+
+                    local install_success=false
+                    if [ -f "./pnpm" ]; then
+                        # 使用本地pnpm
+                        if ./pnpm add "${dep_name}@file:${alpha_file}" --force; then
+                            install_success=true
+                        fi
+                    elif command -v pnpm >/dev/null 2>&1; then
+                        # 使用全局pnpm
+                        if pnpm add "${dep_name}@file:${alpha_file}" --force; then
+                            install_success=true
+                        fi
+                    else
+                        echo "   ❌ 未找到pnpm命令 | pnpm command not found"
+                        ((install_failures++))
+                        _devup_record_alpha_installation "$node_name" "package" "$dep_name" "pnpm_not_found" "failed"
+                        continue
+                    fi
+
+                    if [ "$install_success" = true ]; then
+                        echo "   ✅ 依赖 $dep_name alpha版本安装成功 | Dependency $dep_name alpha version installed successfully"
+                        # 记录成功的alpha版本安装 | Record successful alpha version installation
+                        _devup_record_alpha_installation "$node_name" "package" "$dep_name" "$alpha_file" "success"
+                    else
+                        echo "   ❌ 依赖 $dep_name alpha版本安装失败 | Dependency $dep_name alpha version installation failed"
+                        ((install_failures++))
+                        # 记录失败的alpha版本安装 | Record failed alpha version installation
+                        _devup_record_alpha_installation "$node_name" "package" "$dep_name" "$alpha_file" "failed"
+                    fi
+
+                else
+                    echo "   ❌ 未找到依赖 '$dep_name' 的alpha版本文件 | Alpha version file not found for dependency '$dep_name'"
+                    echo "   💡 可能原因: 1) 依赖包尚未构建 2) 依赖名称不匹配 3) alpha文件已被清理 | Possible reasons: 1) Dependency not built yet 2) Dependency name mismatch 3) Alpha file cleaned up"
+                    ((install_failures++))
+                    # 记录找不到文件的情况 | Record file not found case
+                    _devup_record_alpha_installation "$node_name" "package" "$dep_name" "not_found" "failed"
+                fi
+
+                echo ""
             fi
-        done
+        done <<< "$dependencies"
+
+        # 检查是否有安装失败的依赖 | Check if there are failed dependency installations
+        if [ "$install_failures" -gt 0 ]; then
+            echo "⚠️  有 $install_failures 个依赖安装失败，但继续构建过程 | $install_failures dependencies failed to install, but continuing build process"
+            echo "💡 提示: 确保依赖在链式配置中的顺序正确，依赖的package应该在当前package之前 | Tip: Ensure correct order in chain config, dependency packages should come before current package"
+        else
+            echo "✅ 所有链式依赖安装成功 | All chain dependencies installed successfully"
+        fi
+
     else
-        echo "💡 此包没有依赖项 | This package has no dependencies"
+        echo "💡 此包没有链式依赖项 | This package has no chain dependencies"
     fi
 
     echo "🚀 开始执行构建命令... | Starting build command execution..."
@@ -1473,7 +1729,24 @@ _devup_build_package_node() {
                 local alpha_tgz_file
                 alpha_tgz_file=$(find . -name "*-alpha.${timestamp}.tgz" -type f 2>/dev/null | head -1)
                 if [ -n "$alpha_tgz_file" ] && [ -f "$alpha_tgz_file" ]; then
+                    # 转换为绝对路径 | Convert to absolute path
+                    alpha_tgz_file=$(realpath "$alpha_tgz_file" 2>/dev/null || echo "$package_dir/$alpha_tgz_file")
                     echo "📦 生成的 alpha 包文件: $alpha_tgz_file | Generated alpha package file: $alpha_tgz_file"
+
+                    # 记录到构建上下文中 | Record in build context
+                    _devup_record_package_context "$package_name" "$package_dir" "$alpha_tgz_file"
+                    echo "📝 已记录到构建上下文: $package_name -> $alpha_tgz_file | Recorded in build context: $package_name -> $alpha_tgz_file"
+
+                    # 同时支持通过节点名称查找 | Also support lookup by node name
+                    local node_name
+                    node_name=$(echo "$node_data" | jq -r '.name')
+                    if [ "$node_name" != "$package_name" ] && [ -n "$node_name" ]; then
+                        _devup_record_package_context "$node_name" "$package_dir" "$alpha_tgz_file"
+                        echo "📝 同时记录节点名称: $node_name -> $alpha_tgz_file | Also recorded node name: $node_name -> $alpha_tgz_file"
+                    fi
+
+                else
+                    echo "⚠️  警告: 未找到生成的alpha包文件 | Warning: Generated alpha package file not found"
                 fi
             else
                 echo "❌ alpha 版本包生成失败 | Alpha version package generation failed"
@@ -1495,6 +1768,7 @@ _devup_build_package_node() {
 # Build app node
 _devup_build_app_node() {
     local node_data="$1"
+    local parsed_chain_result="$2"
 
     local app_dir start_command
     app_dir=$(echo "$node_data" | jq -r '.app_dir')
@@ -1525,13 +1799,77 @@ _devup_build_app_node() {
     if [ -n "$dependencies" ]; then
         echo "🔗 检测到链式依赖包，开始安装alpha版本... | Chain dependencies detected, starting alpha version installation..."
 
+        # 安装失败计数器
+        local install_failures=0
+
+        # 获取节点名称用于记录 | Get node name for recording
+        local node_name
+        node_name=$(echo "$node_data" | jq -r '.name')
+
         # 遍历每个依赖 | Iterate through each dependency
-        echo "$dependencies" | while IFS= read -r dep_name; do
+        while IFS= read -r dep_name; do
             if [ -n "$dep_name" ]; then
                 echo "📦 处理链式依赖: $dep_name | Processing chain dependency: $dep_name"
-                echo "   ⚠️  链式依赖安装功能待完善 - 需要从之前构建的包中查找alpha版本 | Chain dependency installation to be improved - need to find alpha versions from previously built packages"
+
+                # 查找依赖的alpha版本文件 | Find dependency alpha version file
+                local alpha_file
+                alpha_file=$(_devup_find_dependency_alpha_file "$dep_name" "$parsed_chain_result" 2>/dev/null)
+
+                if [ $? -eq 0 ] && [ -n "$alpha_file" ] && [ -f "$alpha_file" ]; then
+                    echo "   ✅ 找到alpha版本文件: $alpha_file | Found alpha version file: $alpha_file"
+
+                    # 使用pnpm安装alpha版本包 | Install alpha version package using pnpm
+                    echo "   🚀 安装alpha版本: $dep_name@file:$alpha_file | Installing alpha version: $dep_name@file:$alpha_file"
+
+                    local install_success=false
+                    if [ -f "./pnpm" ]; then
+                        # 使用本地pnpm
+                        if ./pnpm add "${dep_name}@file:${alpha_file}" --force; then
+                            install_success=true
+                        fi
+                    elif command -v pnpm >/dev/null 2>&1; then
+                        # 使用全局pnpm
+                        if pnpm add "${dep_name}@file:${alpha_file}" --force; then
+                            install_success=true
+                        fi
+                    else
+                        echo "   ❌ 未找到pnpm命令 | pnpm command not found"
+                        ((install_failures++))
+                        _devup_record_alpha_installation "$node_name" "app" "$dep_name" "pnpm_not_found" "failed"
+                        continue
+                    fi
+
+                    if [ "$install_success" = true ]; then
+                        echo "   ✅ 依赖 $dep_name alpha版本安装成功 | Dependency $dep_name alpha version installed successfully"
+                        # 记录成功的alpha版本安装 | Record successful alpha version installation
+                        _devup_record_alpha_installation "$node_name" "app" "$dep_name" "$alpha_file" "success"
+                    else
+                        echo "   ❌ 依赖 $dep_name alpha版本安装失败 | Dependency $dep_name alpha version installation failed"
+                        ((install_failures++))
+                        # 记录失败的alpha版本安装 | Record failed alpha version installation
+                        _devup_record_alpha_installation "$node_name" "app" "$dep_name" "$alpha_file" "failed"
+                    fi
+
+                else
+                    echo "   ❌ 未找到依赖 '$dep_name' 的alpha版本文件 | Alpha version file not found for dependency '$dep_name'"
+                    echo "   💡 可能原因: 1) 依赖包尚未构建 2) 依赖名称不匹配 3) alpha文件已被清理 | Possible reasons: 1) Dependency not built yet 2) Dependency name mismatch 3) Alpha file cleaned up"
+                    ((install_failures++))
+                    # 记录找不到文件的情况 | Record file not found case
+                    _devup_record_alpha_installation "$node_name" "app" "$dep_name" "not_found" "failed"
+                fi
+
+                echo ""
             fi
-        done
+        done <<< "$dependencies"
+
+        # 检查是否有安装失败的依赖 | Check if there are failed dependency installations
+        if [ "$install_failures" -gt 0 ]; then
+            echo "⚠️  有 $install_failures 个依赖安装失败，但继续构建过程 | $install_failures dependencies failed to install, but continuing build process"
+            echo "💡 提示: 确保依赖在链式配置中的顺序正确，依赖的package应该在当前app之前 | Tip: Ensure correct order in chain config, dependency packages should come before current app"
+        else
+            echo "✅ 所有链式依赖安装成功 | All chain dependencies installed successfully"
+        fi
+
     else
         echo "💡 此应用没有链式依赖项 | This app has no chain dependencies"
     fi
