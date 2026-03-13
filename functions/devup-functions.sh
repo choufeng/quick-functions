@@ -162,7 +162,22 @@ devup() {
     else
         echo "⚠️  跳过构建步骤 (未配置构建命令) | Skipping build step (no build command configured)"
     fi
-    
+
+    # 清理所有旧的包文件，避免重复打包 | Clean up all old package files to prevent duplicate packaging
+    echo "🧹 清理包目录中的 .tgz 文件... | Cleaning up .tgz files in package directory..."
+    local cleanup_count=0
+    if command -v find >/dev/null 2>&1; then
+        # 查找并计数所有 .tgz 文件
+        cleanup_count=$(find "$package_dir" -name "*.tgz" -type f 2>/dev/null | wc -l | tr -d ' ')
+        # 删除所有 .tgz 文件
+        find "$package_dir" -name "*.tgz" -type f -delete 2>/dev/null || true
+        if [ "$cleanup_count" -gt 0 ]; then
+            echo "✅ 清理了 $cleanup_count 个旧的包文件 | Cleaned up $cleanup_count old package files"
+        else
+            echo "💡 没有发现需要清理的包文件 | No package files found to clean up"
+        fi
+    fi
+
     echo "🔨 执行 pnpm pack... | Running pnpm pack..."
     local pack_success=false
     if command -v pnpm >/dev/null 2>&1; then
